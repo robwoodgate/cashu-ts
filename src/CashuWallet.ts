@@ -339,7 +339,8 @@ class CashuWallet {
 		const { keep: keepProofsOffline, send: sendProofOffline } = this.selectProofsToSend(
 			proofs,
 			amount,
-			options?.includeFees
+			options?.includeFees,
+			true // exactMatch
 		);
 		const expectedFee = includeFees ? this.getFeesForProofs(sendProofOffline) : 0;
 		if (
@@ -356,7 +357,8 @@ class CashuWallet {
 			const { keep: keepProofsSelect, send: sendProofs } = this.selectProofsToSend(
 				proofs,
 				amount,
-				true
+				true, // includeFees
+				false // not exactMatch
 			);
 			proofsWeHave?.push(...keepProofsSelect);
 
@@ -384,27 +386,45 @@ class CashuWallet {
 	}
 
 	/**
-	 * Selects proofs to send based on the amount and fee inclusion preference.
+	 * Selects proofs to send based on the amount, fee inclusion preference, and exact match requirement.
 	 * @param proofs Array of Proof objects available to select from
 	 * @param amountToSend The target amount to send
-	 * @param includeFees Optional boolean to include fees in the calculation; defaults to false if not provided
+	 * @param includeFees Optional boolean to include fees in the calculation; Default: false
+	 * @param exactMatch Optional boolean to require an exact match; Default: false
 	 * @returns SendResponse containing proofs to keep and proofs to send
 	 */
 	selectProofsToSend(
 		proofs: Array<Proof>,
 		amountToSend: number,
-		includeFees?: boolean
+		includeFees: boolean = false,
+		exactMatch: boolean = false
 	): SendResponse {
-		// Nothing to do?
+		// Handle invalid or zero amount case
 		if (amountToSend <= 0) {
 			return { keep: proofs, send: [] };
 		}
 
+		// Exact match: find the first subset that satisfies the condition
+		if (exactMatch) {
+			for (const subset of this.getAllSubsets(proofs)) {
+				const sum = subset.reduce((acc, proof) => acc + proof.amount, 0);
+				const adjustedAmount = includeFees ? sum - this.getFeesForProofs(subset) : sum;
+				if (adjustedAmount === amountToSend) {
+					return {
+						keep: proofs.filter((proof) => !subset.includes(proof)),
+						send: subset
+					};
+				}
+			}
+
+			// Still here? Return all proofs as exact match not found
+			return { keep: proofs, send: [] };
+		}
+
+		// Non-exact match: find the best subset minimizing fee, then sum
 		let bestSubset: Array<Proof> | null = null;
 		let bestFee = Infinity;
 		let bestSum = Infinity;
-
-		// Use the generator to get subsets one by one
 		for (const subset of this.getAllSubsets(proofs)) {
 			const sum = subset.reduce((a, p) => a + p.amount, 0);
 			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
@@ -418,23 +438,22 @@ class CashuWallet {
 				}
 			}
 		}
-
-		// If a valid subset was found, return it; otherwise, return all proofs as keep and empty send array
 		if (bestSubset) {
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
 				send: bestSubset
 			};
-		} else {
-			return { keep: proofs, send: [] };
 		}
+
+		// Still here? Return all proofs as nothing suitable found
+		return { keep: proofs, send: [] };
 	}
 
 	/**
 	 * Generates all possible non-empty subsets of the given array of proofs.
 	 *
-	 * This method uses a recursive approach to create subsets by either including or excluding each proof in the array.
-	 * It yields subsets incrementally, allowing for memory-efficient processing of large input sets.
+	 * Recursively creates subsets by either including or excluding each proof in the array.
+	 * Yields subsets incrementally, allowing memory-efficient processing of large input sets.
 	 *
 	 * @param proofs - The array of Proof objects from which subsets are generated.
 	 * @yields An array representing a non-empty subset of the input proofs.

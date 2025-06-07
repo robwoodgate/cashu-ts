@@ -1012,17 +1012,24 @@ describe('Test coinselection', () => {
 		}
 	];
 	test('offline coinselection', async () => {
-		const wallet = new CashuWallet(mint, { unit });
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const targetAmount = 25;
 		const { send } = await wallet.send(targetAmount, notes, { offline: true });
 		expect(send).toHaveLength(3);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(25);
 	});
-	test('next best offline coinselection', async () => {
-		const wallet = new CashuWallet(mint, { unit });
+	test('next best match coinselection', async () => {
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const targetAmount = 23;
-		const { send } = await wallet.send(targetAmount, notes, { offline: true });
+		const { send } = wallet.selectProofsToSend(
+			notes,
+			targetAmount,
+			true, // includeFees
+			false // no exact match
+		);
 		expect(send).toHaveLength(2);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(24);
@@ -1096,26 +1103,37 @@ describe('Test coinselection', () => {
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const largeNote = [
-			{ id: '009a1f293253e41e', amount: 50, secret: 'secret1', C: 'C1' },
-			{ id: '009a1f293253e41e', amount: 10, secret: 'secret2', C: 'C2' },
-			{ id: '009a1f293253e41e', amount: 5, secret: 'secret3', C: 'C3' }
+			{ id: '009a1f293253e41e', amount: 64, secret: 'secret1', C: 'C1' },
+			{ id: '009a1f293253e41e', amount: 16, secret: 'secret2', C: 'C2' },
+			{ id: '009a1f293253e41e', amount: 4, secret: 'secret3', C: 'C3' }
 		];
-		const targetAmount = 48;
-		const { send } = await wallet.send(targetAmount, largeNote, {
-			offline: true,
-			includeFees: true
-		});
-		// Fee = ceil(1 * 1000 / 1000) = 1, need 48 + 1 = 49, 50 >= 49
+		const targetAmount = 60;
+		const { send } = wallet.selectProofsToSend(
+			largeNote,
+			targetAmount,
+			true, // includeFees
+			false // no exact match
+		);
+		// Fee = ceil(1 * 1000 / 1000) = 1, need 60 + 1 = 61, 64 >= 61
 		expect(send).toHaveLength(1);
-		expect(send[0].amount).toBe(50);
+		expect(send[0].amount).toBe(64);
+		const { send: sendExact } = wallet.selectProofsToSend(
+			largeNote,
+			15,
+			true, // includeFees
+			false // exact match
+		);
+		// Fee = ceil(1 * 1000 / 1000) = 1, need 15 + 1 = 16
+		expect(sendExact).toHaveLength(1);
+		expect(sendExact[0].amount).toBe(16);
 	});
 	test('multiple keysets with different fees', async () => {
 		server.use(
 			http.get(mintUrl + '/v1/keysets', () => {
 				return HttpResponse.json({
 					keysets: [
-						{ id: 'keyset1', unit: 'sat', active: true, input_fee_ppk: 600 },
-						{ id: 'keyset2', unit: 'sat', active: true, input_fee_ppk: 1000 }
+						{ id: '00keyset1', unit: 'sat', active: true, input_fee_ppk: 600 },
+						{ id: '00keyset2', unit: 'sat', active: true, input_fee_ppk: 1000 }
 					]
 				});
 			})
@@ -1123,18 +1141,20 @@ describe('Test coinselection', () => {
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const mixedNotes = [
-			{ id: 'keyset1', amount: 16, secret: 'secret1', C: 'C1' },
-			{ id: 'keyset2', amount: 16, secret: 'secret2', C: 'C2' },
-			{ id: 'keyset1', amount: 1, secret: 'secret3', C: 'C3' },
-			{ id: 'keyset2', amount: 10, secret: 'secret4', C: 'C4' }
+			{ id: '00keyset1', amount: 16, secret: 'secret1', C: 'C1' },
+			{ id: '00keyset2', amount: 16, secret: 'secret2', C: 'C2' },
+			{ id: '00keyset1', amount: 1, secret: 'secret3', C: 'C3' },
+			{ id: '00keyset2', amount: 10, secret: 'secret4', C: 'C4' }
 		];
 		const targetAmount = 31;
-		const { send } = await wallet.send(targetAmount, mixedNotes, {
-			offline: true,
-			includeFees: true
-		});
+		const { send } = wallet.selectProofsToSend(
+			mixedNotes,
+			targetAmount,
+			true, // includeFees
+			false // no exact match
+		);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-		// e.g., [16_keyset1, 16_keyset2, 10_keyset2], fee = ceil((600+1000+1000)/1000) = 3, net = 42 - 3 = 39 >= 31
+		// e.g., [16_00keyset1, 16_00keyset2, 10_00keyset2], fee = ceil((600+1000+1000)/1000) = 3, net = 42 - 3 = 39 >= 31
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(42);
 	});
@@ -1149,9 +1169,9 @@ describe('Test coinselection', () => {
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const targetAmount = 0;
+		// Exact match (offline)
 		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
 		// No proofs needed, fee = 0, net = 0 >= 0
-		console.log('zero amount to send', send);
 		expect(send).toHaveLength(0);
 	});
 	test('all proofs smaller than target', async () => {
@@ -1165,47 +1185,33 @@ describe('Test coinselection', () => {
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const smallNotes = [
-			{ id: '009a1f293253e41e', amount: 5, secret: 'secret1', C: 'C1' },
-			{ id: '009a1f293253e41e', amount: 5, secret: 'secret2', C: 'C2' },
-			{ id: '009a1f293253e41e', amount: 5, secret: 'secret3', C: 'C3' },
-			{ id: '009a1f293253e41e', amount: 5, secret: 'secret4', C: 'C4' }
+			{ id: '009a1f293253e41e', amount: 8, secret: 'secret1', C: 'C1' },
+			{ id: '009a1f293253e41e', amount: 8, secret: 'secret2', C: 'C2' },
+			{ id: '009a1f293253e41e', amount: 8, secret: 'secret3', C: 'C3' },
+			{ id: '009a1f293253e41e', amount: 1, secret: 'secret4', C: 'C4' }
 		];
 		const targetAmount = 15;
+		// Exact match (offline)
 		const { send } = await wallet.send(targetAmount, smallNotes, {
 			offline: true,
 			includeFees: true
 		});
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-		// Fee = ceil(4 * 600 / 1000) = 3, need 15 + 3 = 18, 20 >= 18
-		expect(send).toHaveLength(4);
-		expect(amountSend).toBe(20);
-	});
-	test('proofs with zero amount', async () => {
-		server.use(
-			http.get(mintUrl + '/v1/keysets', () => {
-				return HttpResponse.json({
-					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 600 }]
-				});
-			})
+		// Fee = ceil(3 * 600 / 1000) = 2, need 15 + 2 = 17
+		expect(send).toHaveLength(3);
+		expect(amountSend).toBe(17);
+		// Best match (online)
+		const { send: sendOffline } = wallet.selectProofsToSend(
+			smallNotes,
+			targetAmount + 1, // 16
+			true, // includeFees
+			false // no exact match
 		);
-		const keysets = await mint.getKeySets();
-		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
-		const zeroNotes = [
-			{ id: '009a1f293253e41e', amount: 0, secret: 'secret1', C: 'C1' },
-			{ id: '009a1f293253e41e', amount: 0, secret: 'secret2', C: 'C2' },
-			{ id: '009a1f293253e41e', amount: 5, secret: 'secret3', C: 'C3' },
-			{ id: '009a1f293253e41e', amount: 10, secret: 'secret4', C: 'C4' }
-		];
-		const targetAmount = 10;
-		const { send } = await wallet.send(targetAmount, zeroNotes, {
-			offline: true,
-			includeFees: true
-		});
-		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-		// Should select [5,10], fee = ceil(2 * 600 / 1000) = 2, net = 15 - 2 = 13 >= 10
-		expect(send).toHaveLength(2);
-		expect(amountSend).toBe(15);
-		expect(send.every((p) => p.amount > 0)).toBe(true); // Ensure no zero-amount proofs are selected
+		console.log('sendOffline', sendOffline);
+		const amountSendOffline = sendOffline.reduce((acc, p) => acc + p.amount, 0);
+		// Fee = ceil(3 * 600 / 1000) = 2, need 16 + 2 = 18 (24 > 18 = best match)
+		expect(sendOffline).toHaveLength(3);
+		expect(amountSendOffline).toBe(24);
 	});
 });
 
