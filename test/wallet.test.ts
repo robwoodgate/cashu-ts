@@ -1011,14 +1011,18 @@ describe('Test coinselection', () => {
 			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
 		}
 	];
-	test('offline coinselection', async () => {
+	test('offline coinselection, zero fee keyset', async () => {
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const targetAmount = 25;
-		const { send } = await wallet.send(targetAmount, notes, { offline: true });
+		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: false });
 		expect(send).toHaveLength(3);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(25);
+		const { send: sendFeesInc } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
+		expect(sendFeesInc).toHaveLength(3);
+		const amountSendFeesInc = sendFeesInc.reduce((acc, p) => acc + p.amount, 0);
+		expect(amountSendFeesInc).toBe(25);
 	});
 	test('next best match coinselection', async () => {
 		const keysets = await mint.getKeySets();
@@ -1067,6 +1071,8 @@ describe('Test coinselection', () => {
 		// Fee = ceil(3 * 600 / 1000) = 2, net = 33 - 2 = 31
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(33);
+		const fee = wallet.getFeesForProofs(send);
+		expect(amountSend - fee).toBe(targetAmount);
 	});
 	test('insufficient proofs', async () => {
 		server.use(
@@ -1200,6 +1206,8 @@ describe('Test coinselection', () => {
 		// Fee = ceil(3 * 600 / 1000) = 2, need 15 + 2 = 17
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(17);
+		const fee = wallet.getFeesForProofs(send);
+		expect(amountSend - fee).toBe(targetAmount);
 		// Best match (online)
 		const { send: sendOffline } = wallet.selectProofsToSend(
 			smallNotes,
@@ -1212,6 +1220,58 @@ describe('Test coinselection', () => {
 		// Fee = ceil(3 * 600 / 1000) = 2, need 16 + 2 = 18 (24 > 18 = best match)
 		expect(sendOffline).toHaveLength(3);
 		expect(amountSendOffline).toBe(24);
+	});
+	test('exact match not possible', async () => {
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const proofs = [
+			{ id: '009a1f293253e41e', amount: 2, secret: 's1', C: 'C1' },
+			{ id: '009a1f293253e41e', amount: 2, secret: 's2', C: 'C2' },
+			{ id: '009a1f293253e41e', amount: 2, secret: 's3', C: 'C3' }
+		];
+		const targetAmount = 5;
+		await expect(
+			wallet.send(targetAmount, proofs, { offline: true, includeFees: true })
+		).rejects.toThrow('Not enough funds available to send');
+	});
+	test('minimal fee selection', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [
+						{ id: '00low', unit: 'sat', active: true, input_fee_ppk: 200 },
+						{ id: '00high', unit: 'sat', active: true, input_fee_ppk: 1000 }
+					]
+				});
+			})
+		);
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const proofs = [
+			{ id: '00low', amount: 16, secret: 's1', C: 'C1' },
+			{ id: '00high', amount: 16, secret: 's2', C: 'C2' },
+			{ id: '00low', amount: 8, secret: 's3', C: 'C3' }
+		];
+		const targetAmount = 20;
+		const { send } = wallet.selectProofsToSend(proofs, targetAmount, true, false);
+		const fee = wallet.getFeesForProofs(send);
+		expect(send.every((p) => p.id === '00low')).toBe(true); // Prefer low-fee keyset
+		expect(send.reduce((a, p) => a + p.amount, 0) - fee).toBeGreaterThanOrEqual(targetAmount);
+	});
+	test('zero fee scenario', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 0 }]
+				});
+			})
+		);
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const targetAmount = 25;
+		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
+		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		expect(amountSend).toBe(25); // No fee adjustment
 	});
 });
 
