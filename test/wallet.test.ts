@@ -1019,7 +1019,10 @@ describe('Test coinselection', () => {
 		expect(send).toHaveLength(3);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(25);
-		const { send: sendFeesInc } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
+		const { send: sendFeesInc } = await wallet.send(targetAmount, notes, {
+			offline: true,
+			includeFees: true
+		});
 		expect(sendFeesInc).toHaveLength(3);
 		const amountSendFeesInc = sendFeesInc.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSendFeesInc).toBe(25);
@@ -1051,9 +1054,11 @@ describe('Test coinselection', () => {
 		const targetAmount = 31;
 		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		const fee = wallet.getFeesForProofs(send);
 		// Fee = ceil(3 * 1000 / 1000) = 3, net = 34 - 3 = 31
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(34);
+		expect(amountSend - fee).toBe(targetAmount);
 	});
 	test('offline coinselection with medium input fees', async () => {
 		server.use(
@@ -1068,10 +1073,10 @@ describe('Test coinselection', () => {
 		const targetAmount = 31;
 		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		const fee = wallet.getFeesForProofs(send);
 		// Fee = ceil(3 * 600 / 1000) = 2, net = 33 - 2 = 31
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(33);
-		const fee = wallet.getFeesForProofs(send);
 		expect(amountSend - fee).toBe(targetAmount);
 	});
 	test('insufficient proofs', async () => {
@@ -1123,6 +1128,9 @@ describe('Test coinselection', () => {
 		// Fee = ceil(1 * 1000 / 1000) = 1, need 60 + 1 = 61, 64 >= 61
 		expect(send).toHaveLength(1);
 		expect(send[0].amount).toBe(64);
+		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		const fee = wallet.getFeesForProofs(send);
+		expect(amountSend - fee).toBeGreaterThanOrEqual(targetAmount);
 		const { send: sendExact } = wallet.selectProofsToSend(
 			largeNote,
 			15,
@@ -1160,6 +1168,8 @@ describe('Test coinselection', () => {
 			false // no exact match
 		);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		const fee = wallet.getFeesForProofs(send);
+		expect(amountSend - fee).toBeGreaterThanOrEqual(targetAmount);
 		// e.g., [16_00keyset1, 16_00keyset2, 10_00keyset2], fee = ceil((600+1000+1000)/1000) = 3, net = 42 - 3 = 39 >= 31
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(42);
@@ -1272,6 +1282,31 @@ describe('Test coinselection', () => {
 		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(25); // No fee adjustment
+	});
+	test('duplicate proofs exceeding limit', async () => {
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const dupNotes = Array(10).fill({ id: '009a1f293253e41e', amount: 8, secret: 's', C: 'C' });
+		const targetAmount = 24;
+		const { send } = await wallet.send(targetAmount, dupNotes, {
+			offline: true,
+			includeFees: false
+		});
+		expect(send).toHaveLength(3); // 3 * 8 = 24
+	});
+	test('non-exact match with zero fees', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 0 }]
+				});
+			})
+		);
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const targetAmount = 23;
+		const { send } = wallet.selectProofsToSend(notes, targetAmount, true, false);
+		expect(send.reduce((a, p) => a + p.amount, 0)).toBeGreaterThanOrEqual(targetAmount);
 	});
 });
 
