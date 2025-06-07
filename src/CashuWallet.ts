@@ -383,54 +383,97 @@ class CashuWallet {
 		return { keep: keepProofsOffline, send: sendProofOffline };
 	}
 
+	/**
+	 * Selects proofs to send based on the amount and fee inclusion preference.
+	 * @param proofs Array of Proof objects available to select from
+	 * @param amountToSend The target amount to send
+	 * @param includeFees Optional boolean to include fees in the calculation; defaults to false if not provided
+	 * @returns SendResponse containing proofs to keep and proofs to send
+	 */
 	selectProofsToSend(
 		proofs: Array<Proof>,
 		amountToSend: number,
 		includeFees?: boolean
 	): SendResponse {
-		const sortedProofs = proofs.sort((a: Proof, b: Proof) => a.amount - b.amount);
-		const smallerProofs = sortedProofs
-			.filter((p: Proof) => p.amount <= amountToSend)
-			.sort((a: Proof, b: Proof) => b.amount - a.amount);
-		const biggerProofs = sortedProofs
-			.filter((p: Proof) => p.amount > amountToSend)
-			.sort((a: Proof, b: Proof) => a.amount - b.amount);
-		const nextBigger = biggerProofs[0];
-		if (!smallerProofs.length && nextBigger) {
-			return {
-				keep: proofs.filter((p: Proof) => p.secret !== nextBigger.secret),
-				send: [nextBigger]
-			};
-		}
-
-		if (!smallerProofs.length && !nextBigger) {
+		// Nothing to do?
+		if (amountToSend <= 0) {
 			return { keep: proofs, send: [] };
 		}
 
-		let remainder = amountToSend;
-		let selectedProofs = [smallerProofs[0]];
-		const returnedProofs = [];
-		const feePPK = includeFees ? this.getProofFeePPK(selectedProofs[0]) : 0;
-		remainder -= selectedProofs[0].amount - feePPK / 1000;
-		if (remainder > 0) {
-			const { keep, send } = this.selectProofsToSend(
-				smallerProofs.slice(1),
-				remainder,
-				includeFees
-			);
-			selectedProofs.push(...send);
-			returnedProofs.push(...keep);
+		let bestSubset: Array<Proof> | null = null;
+		let bestFee = Infinity;
+		let bestSum = Infinity;
+
+		// Use the generator to get subsets one by one
+		for (const subset of this.getAllSubsets(proofs)) {
+			const sum = subset.reduce((a, p) => a + p.amount, 0);
+			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
+			// Check if the subset's sum covers the amount to send plus the fee
+			if (sum >= amountToSend + fee) {
+				// Check if this subset is better than the current best
+				if (fee < bestFee || (fee === bestFee && sum < bestSum)) {
+					bestSubset = subset;
+					bestFee = fee;
+					bestSum = sum;
+				}
+			}
 		}
 
-		const selectedFeePPK = includeFees ? this.getFeesForProofs(selectedProofs) : 0;
-		if (sumProofs(selectedProofs) < amountToSend + selectedFeePPK && nextBigger) {
-			selectedProofs = [nextBigger];
+		// If a valid subset was found, return it; otherwise, return all proofs as keep and empty send array
+		if (bestSubset) {
+			return {
+				keep: proofs.filter((p) => !bestSubset.includes(p)),
+				send: bestSubset
+			};
+		} else {
+			return { keep: proofs, send: [] };
+		}
+	}
+
+	/**
+	 * Generates all possible non-empty subsets of the given array of proofs.
+	 *
+	 * This method uses a recursive approach to create subsets by either including or excluding each proof in the array.
+	 * It yields subsets incrementally, allowing for memory-efficient processing of large input sets.
+	 *
+	 * @param proofs - The array of Proof objects from which subsets are generated.
+	 * @yields An array representing a non-empty subset of the input proofs.
+	 *
+	 * @remarks
+	 * - The input array is filtered to include at most 4 proofs per unique amount
+	 * - The order of subsets is not guaranteed and depends on the recursive traversal.
+	 * - Only subsets with at least one element are yielded.
+	 * - The time complexity is O(2^n), where n is the length of the filtered proofs array.
+	 * - Small input arrays are better, as the number of subsets grows exponentially with input size.
+	 */
+	private *getAllSubsets(proofs: Array<Proof>): Generator<Array<Proof>> {
+		// Filter proofs to include at most 4 proofs per unique amount to reduce computational complexity.
+		const amountCounts = new Map<number, Proof[]>();
+		for (const proof of proofs) {
+			if (!amountCounts.has(proof.amount)) {
+				amountCounts.set(proof.amount, []);
+			}
+			amountCounts.get(proof.amount)!.push(proof);
+		}
+		const filteredProofs: Proof[] = [];
+		for (const proofsOfAmount of amountCounts.values()) {
+			filteredProofs.push(...proofsOfAmount.slice(0, 4)); // Take up to 4 proofs per amount
 		}
 
-		return {
-			keep: proofs.filter((p: Proof) => !selectedProofs.includes(p)),
-			send: selectedProofs
-		};
+		// Generate subsets from filtered proofs using a generator
+		function* generate(current: Array<Proof>, index: number): Generator<Array<Proof>> {
+			if (index === filteredProofs.length) {
+				if (current.length > 0) {
+					yield [...current];
+				}
+				return;
+			}
+			yield* generate(current, index + 1); // Exclude current proof
+			current.push(filteredProofs[index]);
+			yield* generate(current, index + 1); // Include current proof
+			current.pop();
+		}
+		yield* generate([], 0);
 	}
 
 	/**
