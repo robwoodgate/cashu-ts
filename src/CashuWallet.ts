@@ -528,18 +528,6 @@ class CashuWallet {
 	 * - Small input arrays are better, as the number of subsets grows exponentially with input size.
 	 */
 	private *getAllSubsets(proofs: Array<Proof>): Generator<Array<Proof>> {
-		// // Filter proofs to include at most 4 proofs per unique amount to reduce computational complexity.
-		// const amountCounts = new Map<number, Proof[]>();
-		// for (const proof of proofs) {
-		// 	if (!amountCounts.has(proof.amount)) {
-		// 		amountCounts.set(proof.amount, []);
-		// 	}
-		// 	amountCounts.get(proof.amount)!.push(proof);
-		// }
-		// const filteredProofs: Proof[] = [];
-		// for (const proofsOfAmount of amountCounts.values()) {
-		// 	filteredProofs.push(...proofsOfAmount.slice(0, 4)); // Take up to 4 proofs per amount
-		// }
 		// Interleave the proof array to give us a good starting selection
 		const interleavedProofs = this.interleaveProofsByAmount(proofs);
 		console.log(
