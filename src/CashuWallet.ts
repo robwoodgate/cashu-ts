@@ -408,17 +408,21 @@ class CashuWallet {
 		const startTime = Date.now();
 		const timeLimit = 1000; // 1 second in milliseconds
 		const checkInterval = 10000; // Check time every 10,000 iterations
+		const maxIterations = 1000000; // Hard limit: 1 million iterations
 		let iterationCount = 0;
 		// Remove all proofs with amount higher than next power
 		const nextPower = Math.pow(2, Math.ceil(Math.log2(amountToSend + 1)));
-		const filteredProofs = proofs.filter((p) => p.amount <= nextPower);
-		console.log('filteredProofs', filteredProofs.map((p)=>p.amount));
+		const eligibleProofs = proofs.filter((p) => p.amount <= nextPower);
+		console.log(
+			'eligibleProofs',
+			eligibleProofs.map((p) => p.amount)
+		);
 
 		// Exact match: find the first subset that satisfies the condition
 		if (exactMatch) {
-			for (const subset of this.getAllSubsets(filteredProofs)) {
+			for (const subset of this.getAllSubsets(eligibleProofs)) {
 				if (++iterationCount % checkInterval === 0) {
-					if (Date.now() - startTime > timeLimit) {
+					if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
 						console.warn('Time limit reached for exact match. Returning no send proofs.');
 						return { keep: proofs, send: [] };
 					}
@@ -441,14 +445,19 @@ class CashuWallet {
 		let bestFee = Infinity;
 		let bestSum = Infinity;
 
-		for (const subset of this.getAllSubsets(filteredProofs)) {
+		for (const subset of this.getAllSubsets(eligibleProofs)) {
 			if (++iterationCount % checkInterval === 0) {
-				if (Date.now() - startTime > timeLimit && bestSubset !== null) {
-					console.warn('Time limit reached. Returning the best subset found so far.');
-					return {
-						keep: proofs.filter((p) => !bestSubset.includes(p)),
-						send: bestSubset
-					};
+				if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
+					if (bestSubset !== null) {
+						console.warn('Time or iteration limit reached. Returning the best subset found.');
+						return {
+							keep: proofs.filter((p) => !bestSubset.includes(p)),
+							send: bestSubset
+						};
+					} else {
+						console.warn('Time or iteration limit reached. No suitable subset found.');
+						return { keep: proofs, send: [] };
+					}
 				}
 			}
 			const sum = subset.reduce((a, p) => a + p.amount, 0);
@@ -474,6 +483,35 @@ class CashuWallet {
 		return { keep: proofs, send: [] };
 	}
 
+	private interleaveProofsByAmount(proofs: Array<Proof>): Array<Proof> {
+		// Group proofs by amount
+		const amountGroups = new Map<number, Proof[]>();
+		for (const proof of proofs) {
+			if (!amountGroups.has(proof.amount)) {
+				amountGroups.set(proof.amount, []);
+			}
+			amountGroups.get(proof.amount)!.push(proof);
+		}
+
+		// Sort amounts ascending
+		const sortedAmounts = Array.from(amountGroups.keys()).sort((a, b) => a - b);
+		const result: Proof[] = [];
+		let index = 0;
+
+		// Interleave proofs from each amount group
+		while (result.length < proofs.length) {
+			for (const amount of sortedAmounts) {
+				const group = amountGroups.get(amount)!;
+				if (index < group.length) {
+					result.push(group[index]);
+				}
+			}
+			index++;
+		}
+
+		return result;
+	}
+
 	/**
 	 * Generates all possible non-empty subsets of the given array of proofs.
 	 *
@@ -491,29 +529,35 @@ class CashuWallet {
 	 * - Small input arrays are better, as the number of subsets grows exponentially with input size.
 	 */
 	private *getAllSubsets(proofs: Array<Proof>): Generator<Array<Proof>> {
-		// Filter proofs to include at most 4 proofs per unique amount to reduce computational complexity.
-		const amountCounts = new Map<number, Proof[]>();
-		for (const proof of proofs) {
-			if (!amountCounts.has(proof.amount)) {
-				amountCounts.set(proof.amount, []);
-			}
-			amountCounts.get(proof.amount)!.push(proof);
-		}
-		const filteredProofs: Proof[] = [];
-		for (const proofsOfAmount of amountCounts.values()) {
-			filteredProofs.push(...proofsOfAmount.slice(0, 4)); // Take up to 4 proofs per amount
-		}
+		// // Filter proofs to include at most 4 proofs per unique amount to reduce computational complexity.
+		// const amountCounts = new Map<number, Proof[]>();
+		// for (const proof of proofs) {
+		// 	if (!amountCounts.has(proof.amount)) {
+		// 		amountCounts.set(proof.amount, []);
+		// 	}
+		// 	amountCounts.get(proof.amount)!.push(proof);
+		// }
+		// const filteredProofs: Proof[] = [];
+		// for (const proofsOfAmount of amountCounts.values()) {
+		// 	filteredProofs.push(...proofsOfAmount.slice(0, 4)); // Take up to 4 proofs per amount
+		// }
+		// Interleave the proof array to give us a good starting selection
+		const interleavedProofs = this.interleaveProofsByAmount(proofs);
+		console.log(
+			'interleavedProofs',
+			interleavedProofs.map((p) => p.amount)
+		);
 
 		// Generate subsets from filtered proofs using a generator
 		function* generate(current: Array<Proof>, index: number): Generator<Array<Proof>> {
-			if (index === filteredProofs.length) {
+			if (index === interleavedProofs.length) {
 				if (current.length > 0) {
 					yield [...current];
 				}
 				return;
 			}
 			yield* generate(current, index + 1); // Exclude current proof
-			current.push(filteredProofs[index]);
+			current.push(interleavedProofs[index]);
 			yield* generate(current, index + 1); // Include current proof
 			current.pop();
 		}

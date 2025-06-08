@@ -1317,7 +1317,7 @@ describe('Test coinselection', () => {
 			})
 		);
 
-		// Define 50 additional notes: 255, 256, and 48 others
+		// Define 50 additional notes: 128, and 49 others
 		const additionalNotes = [
 			{
 				id: '009a1f293253e41e',
@@ -1325,7 +1325,7 @@ describe('Test coinselection', () => {
 				secret: 's255',
 				C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
 			},
-			...Array(48)
+			...Array(49)
 				.fill(null)
 				.map((_, i) => ({
 					id: '009a1f293253e41e',
@@ -1340,7 +1340,7 @@ describe('Test coinselection', () => {
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 
 		// Exact Match Test
-		const targetAmountExact = 127;
+		const targetAmountExact = 128;
 		console.time('largeProofsExactTest');
 		const { send: sendExact } = wallet.selectProofsToSend(
 			allNotes,
@@ -1377,6 +1377,34 @@ describe('Test coinselection', () => {
 			sendNonExact.map((p) => p.amount)
 		);
 		expect(amountSendNonExact - feeNonExact).toBeGreaterThanOrEqual(targetAmountNonExact);
+	});
+	test('select small amount with fees from many small notes', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 600 }]
+				});
+			})
+		);
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const smallNotes = [
+			...Array(50).fill({ id: '009a1f293253e41e', amount: 1, secret: 's1', C: 'C1' }),
+			...Array(50).fill({ id: '009a1f293253e41e', amount: 2, secret: 's2', C: 'C2' })
+		];
+		const targetAmount = 15;
+
+		// Non-exact match
+		const { send } = wallet.selectProofsToSend(smallNotes, targetAmount, true, false);
+		console.log(
+			'send:',
+			send.map((p) => p.amount)
+		);
+		const sum = send.reduce((acc, p) => acc + p.amount, 0);
+		const fee = wallet.getFeesForProofs(send);
+		expect(sum - fee).toBeGreaterThanOrEqual(targetAmount);
+		// Check efficiency: should ideally use around 50 proofs or fewer if larger proofs were available
+		expect(send.length).toBeLessThanOrEqual(50);
 	});
 });
 
