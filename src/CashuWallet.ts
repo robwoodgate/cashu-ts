@@ -478,7 +478,13 @@ class CashuWallet {
 		// No suitable subset found
 		return { keep: proofs, send: [] };
 	}
-
+	/**
+	 * Interleaves proofs by grouping and sorting them by amount in ascending order.
+	 * The aim is to provide a spread of amounts to make finding a subset faster.
+	 * Eg: for proof amounts [1,1,2,2,4,8], returns proofs ordered as [1,2,4,1,2,8,...].
+	 * @param proofs - Array of proofs to interleave.
+	 * @returns Array of proofs interleaved by amount
+	 */
 	private interleaveProofsByAmount(proofs: Array<Proof>): Array<Proof> {
 		// Group proofs by amount
 		const amountGroups = new Map<number, Proof[]>();
@@ -488,12 +494,10 @@ class CashuWallet {
 			}
 			amountGroups.get(proof.amount)!.push(proof);
 		}
-
 		// Sort amounts ascending
 		const sortedAmounts = Array.from(amountGroups.keys()).sort((a, b) => a - b);
 		const result: Proof[] = [];
 		let index = 0;
-
 		// Interleave proofs from each amount group
 		while (result.length < proofs.length) {
 			for (const amount of sortedAmounts) {
@@ -504,7 +508,6 @@ class CashuWallet {
 			}
 			index++;
 		}
-
 		return result;
 	}
 
