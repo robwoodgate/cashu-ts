@@ -426,7 +426,7 @@ class CashuWallet {
 			for (const subset of this.getAllSubsets(eligibleProofs)) {
 				if (++iterationCount % checkInterval === 0) {
 					if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
-						console.warn('Time limit reached for exact match. Returning no send proofs.');
+						console.warn('Time limit reached for exact match. No match found.');
 						return { keep: proofs, send: [] };
 					}
 				}
