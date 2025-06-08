@@ -414,7 +414,10 @@ class CashuWallet {
 		const nextBiggerProof = proofs
 			.filter((p) => p.amount > amountToSend)
 			.reduce((min, p) => (p.amount < min.amount ? p : min), { amount: Infinity });
-		console.log('nextBiggerProof', nextBiggerProof);
+		console.log(
+			'nextBiggerProof',
+			[nextBiggerProof].map((p) => p.amount)
+		);
 		const eligibleProofs = proofs.filter((p) => p.amount <= nextBiggerProof.amount);
 		console.log(
 			'eligibleProofs',
