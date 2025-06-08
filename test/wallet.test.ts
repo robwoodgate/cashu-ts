@@ -1254,7 +1254,10 @@ describe('Test coinselection', () => {
 			false, // no fees
 			false // no exact match
 		);
-		console.log('send', send.map((p)=>p.amount));
+		console.log(
+			'send',
+			send.map((p) => p.amount)
+		);
 		expect(send).toBeDefined();
 		expect(send.length).toBe(1);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
