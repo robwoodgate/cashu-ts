@@ -447,35 +447,28 @@ class CashuWallet {
 		let bestSubset: Array<Proof> | null = null;
 		let bestFee = Infinity;
 		let bestSum = Infinity;
-
 		for (const subset of this.getAllSubsets(eligibleProofs)) {
-			if (++iterationCount % checkInterval === 0) {
-				if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
-					if (bestSubset !== null) {
-						console.warn('Time or iteration limit reached. Returning the best subset found.');
-						return {
-							keep: proofs.filter((p) => !bestSubset.includes(p)),
-							send: bestSubset
-						};
-					} else {
-						console.warn('Time or iteration limit reached. No suitable subset found.');
-						return { keep: proofs, send: [] };
-					}
-				}
+			// Check limits periodically
+			if (
+				++iterationCount % checkInterval === 0 &&
+				(Date.now() - startTime > timeLimit || iterationCount >= maxIterations)
+			) {
+				console.warn(
+					`Time or iteration limit reached. ${
+						bestSubset ? 'Returning best subset found.' : 'No suitable subset found.'
+					}`
+				);
+				break; // Exit the loop immediately
 			}
+			// Process subset
 			const sum = subset.reduce((a, p) => a + p.amount, 0);
 			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
-			// Check if the subset's sum covers the amount to send plus the fee
-			if (sum >= amountToSend + fee) {
-				// Update best subset if this one is better
-				if (fee < bestFee || (fee === bestFee && sum < bestSum)) {
-					bestSubset = subset;
-					bestFee = fee;
-					bestSum = sum;
-				}
+			if (sum >= amountToSend + fee && (fee < bestFee || (fee === bestFee && sum < bestSum))) {
+				bestSubset = subset;
+				bestFee = fee;
+				bestSum = sum;
 			}
 		}
-
 		if (bestSubset) {
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
