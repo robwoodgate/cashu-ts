@@ -1308,6 +1308,76 @@ describe('Test coinselection', () => {
 		const { send } = wallet.selectProofsToSend(notes, targetAmount, true, false);
 		expect(send.reduce((a, p) => a + p.amount, 0)).toBeGreaterThanOrEqual(targetAmount);
 	});
+	test('process large proof array (50+ notes)', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 1000 }]
+				});
+			})
+		);
+
+		// Define 50 additional notes: 255, 256, and 48 others
+		const additionalNotes = [
+			{
+				id: '009a1f293253e41e',
+				amount: 128,
+				secret: 's255',
+				C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
+			},
+			...Array(48)
+				.fill(null)
+				.map((_, i) => ({
+					id: '009a1f293253e41e',
+					amount: 2 ** (i % 10), // 1, 2, 4, 8, 16, 32, 64, 128, 256, 512
+					secret: `secret${i}`,
+					C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
+				}))
+		];
+		const allNotes = [...notes, ...additionalNotes]; // 6 + 50 = 56 notes
+		// console.log('allNotes', allNotes.map((p)=>p.amount));
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+
+		// Exact Match Test
+		const targetAmountExact = 127;
+		console.time('largeProofsExactTest');
+		const { send: sendExact } = wallet.selectProofsToSend(
+			allNotes,
+			targetAmountExact,
+			true, // includeFees
+			true // exact match
+		);
+		console.timeEnd('largeProofsExactTest');
+		if (sendExact.length === 0) {
+			throw new Error('No exact match found');
+		}
+		const amountSendExact = sendExact.reduce((acc, p) => acc + p.amount, 0);
+		const feeExact = wallet.getFeesForProofs(sendExact);
+		console.log(
+			'Exact send:',
+			sendExact.map((p) => p.amount)
+		);
+		expect(amountSendExact - feeExact).toBe(targetAmountExact);
+
+		// Non-Exact Match Test
+		const targetAmountNonExact = 127;
+		console.time('largeProofsNonExactTest');
+		const { send: sendNonExact } = wallet.selectProofsToSend(
+			allNotes,
+			targetAmountNonExact,
+			true, // includeFees
+			false // non-exact match
+		);
+		console.timeEnd('largeProofsNonExactTest');
+		const amountSendNonExact = sendNonExact.reduce((acc, p) => acc + p.amount, 0);
+		const feeNonExact = wallet.getFeesForProofs(sendNonExact);
+		console.log(
+			'Non-exact send:',
+			sendNonExact.map((p) => p.amount)
+		);
+		expect(amountSendNonExact - feeNonExact).toBeGreaterThanOrEqual(targetAmountNonExact);
+	});
 });
 
 function expectNUT10SecretDataToEqual(p: Array<Proof>, s: string) {

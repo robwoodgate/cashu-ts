@@ -404,9 +404,25 @@ class CashuWallet {
 			return { keep: proofs, send: [] };
 		}
 
+		// Set Guardrails
+		const startTime = Date.now();
+		const timeLimit = 1000; // 1 second in milliseconds
+		const checkInterval = 10000; // Check time every 10,000 iterations
+		let iterationCount = 0;
+		// Remove all proofs with amount higher than next power
+		const nextPower = Math.pow(2, Math.ceil(Math.log2(amountToSend + 1)));
+		const filteredProofs = proofs.filter((p) => p.amount <= nextPower);
+		console.log('filteredProofs', filteredProofs.map((p)=>p.amount));
+
 		// Exact match: find the first subset that satisfies the condition
 		if (exactMatch) {
-			for (const subset of this.getAllSubsets(proofs)) {
+			for (const subset of this.getAllSubsets(filteredProofs)) {
+				if (++iterationCount % checkInterval === 0) {
+					if (Date.now() - startTime > timeLimit) {
+						console.warn('Time limit reached for exact match. Returning no send proofs.');
+						return { keep: proofs, send: [] };
+					}
+				}
 				const sum = subset.reduce((acc, proof) => acc + proof.amount, 0);
 				const adjustedAmount = includeFees ? sum - this.getFeesForProofs(subset) : sum;
 				if (adjustedAmount === amountToSend) {
@@ -416,21 +432,30 @@ class CashuWallet {
 					};
 				}
 			}
-
-			// Still here? Return all proofs as exact match not found
+			// No exact match found
 			return { keep: proofs, send: [] };
 		}
 
-		// Non-exact match: find the best subset minimizing fee, then sum
+		// Non-exact match: find the best subset, stop optimizing after time limit
 		let bestSubset: Array<Proof> | null = null;
 		let bestFee = Infinity;
 		let bestSum = Infinity;
-		for (const subset of this.getAllSubsets(proofs)) {
+
+		for (const subset of this.getAllSubsets(filteredProofs)) {
+			if (++iterationCount % checkInterval === 0) {
+				if (Date.now() - startTime > timeLimit && bestSubset !== null) {
+					console.warn('Time limit reached. Returning the best subset found so far.');
+					return {
+						keep: proofs.filter((p) => !bestSubset.includes(p)),
+						send: bestSubset
+					};
+				}
+			}
 			const sum = subset.reduce((a, p) => a + p.amount, 0);
 			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
 			// Check if the subset's sum covers the amount to send plus the fee
 			if (sum >= amountToSend + fee) {
-				// Check if this subset is better than the current best
+				// Update best subset if this one is better
 				if (fee < bestFee || (fee === bestFee && sum < bestSum)) {
 					bestSubset = subset;
 					bestFee = fee;
@@ -438,14 +463,14 @@ class CashuWallet {
 				}
 			}
 		}
+
 		if (bestSubset) {
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
 				send: bestSubset
 			};
 		}
-
-		// Still here? Return all proofs as nothing suitable found
+		// No suitable subset found
 		return { keep: proofs, send: [] };
 	}
 
