@@ -1231,6 +1231,35 @@ describe('Test coinselection', () => {
 		expect(sendOffline).toHaveLength(3);
 		expect(amountSendOffline).toBe(24);
 	});
+	test('integration select 10 from 100 minted', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 600 }]
+				});
+			})
+		);
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const smallNotes = [
+			{ id: '009a1f293253e41e', amount: 64, secret: 'secret1', C: 'C1' },
+			{ id: '009a1f293253e41e', amount: 32, secret: 'secret2', C: 'C2' },
+			{ id: '009a1f293253e41e', amount: 4, secret: 'secret3', C: 'C3' }
+		];
+		const targetAmount = 10;
+		// best match (online)
+		const { send } = wallet.selectProofsToSend(
+			smallNotes,
+			targetAmount,
+			false, // no fees
+			false // no exact match
+		);
+		console.log('send', send.map((p)=>p.amount));
+		expect(send).toBeDefined();
+		expect(send.length).toBe(1);
+		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		expect(amountSend).toBe(32);
+	});
 	test('exact match not possible', async () => {
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });

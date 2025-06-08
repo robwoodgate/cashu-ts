@@ -410,9 +410,12 @@ class CashuWallet {
 		const checkInterval = 10000; // Check time every 10,000 iterations
 		const maxIterations = 1000000; // Hard limit: 1 million iterations
 		let iterationCount = 0;
-		// Remove all proofs with amount higher than next power
-		const nextPower = Math.pow(2, Math.ceil(Math.log2(amountToSend + 1)));
-		const eligibleProofs = proofs.filter((p) => p.amount <= nextPower);
+		// Remove all proofs with amount higher than next bigger proof
+		const nextBiggerProof = proofs
+			.filter((p) => p.amount > amountToSend)
+			.reduce((min, p) => (p.amount < min.amount ? p : min), { amount: Infinity });
+		console.log('nextBiggerProof', nextBiggerProof);
+		const eligibleProofs = proofs.filter((p) => p.amount <= nextBiggerProof.amount);
 		console.log(
 			'eligibleProofs',
 			eligibleProofs.map((p) => p.amount)
