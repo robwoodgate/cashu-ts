@@ -387,6 +387,8 @@ class CashuWallet {
 
 	/**
 	 * Selects proofs to send based on amount, fee inclusion, and exact match requirement.
+	 * Uses an adapted RGLI algorithm with multiple trials of randomized greedy selection
+	 * followed by local improvement.
 	 * @param proofs Array of Proof objects available to select from
 	 * @param amountToSend The target amount to send
 	 * @param includeFees Optional boolean to include fees; Default: false
@@ -399,25 +401,24 @@ class CashuWallet {
 		includeFees: boolean = false,
 		exactMatch: boolean = false
 	): SendResponse {
-		// Handle invalid or zero amount
+		// RGLI tweaking constants
+		const MAX_TRIALS = 500;
+		const PROOF_COUNT_PENALTY = 1;
+		const FEE_PENALTY = 10;
+
+		console.log(
+			'proofs',
+			proofs.map((p) => p.amount)
+		);
+
 		if (amountToSend <= 0) {
 			return { keep: proofs, send: [] };
 		}
 
-		// Set Search Guardrails
-		const startTime = Date.now();
-		const timeLimit = 1000; // 1 second
-		const checkInterval = 10000; // Check every 10,000 iterations
-		const maxIterations = 1000000; // Max 1M iterations
-		let iterationCount = 0;
-
-		// Filter economically unspendable proofs
 		const eligibleProofs = includeFees
-			? proofs.filter((p) => p.amount >= Math.ceil(this.getProofFeePPK(p) / 1000))
+			? proofs.filter((p) => p.amount > this.getProofFeePPK(p) / 1000)
 			: proofs;
 
-		// Ensure sum of proofs covers at least amountToSend...
-		// - exactMatch: plus worst-case fees for precision.
 		const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
 		if (exactMatch) {
 			const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
@@ -428,137 +429,103 @@ class CashuWallet {
 			return { keep: proofs, send: [] };
 		}
 
-		// Initialize best result
+		console.log(
+			'eligibleProofs',
+			eligibleProofs.map((p) => p.amount)
+		);
+
+		const adjustedSum = (S: Array<Proof>): number => {
+			const totalAmount = S.reduce((acc, p) => acc + p.amount, 0);
+			const fees = includeFees ? this.getFeesForProofs(S) : 0;
+			return totalAmount - fees;
+		};
+
+		const cost = (S: Array<Proof>): number => {
+			const adj = adjustedSum(S); // Total amount minus fees
+			if (exactMatch) {
+				return adj === amountToSend ? 0 : Infinity;
+			}
+			if (adj < amountToSend) return Infinity;
+			const excess = adj - amountToSend;
+			const feeCost = includeFees ? this.getFeesForProofs(S) : 0;
+			return excess + feeCost * FEE_PENALTY + PROOF_COUNT_PENALTY * S.length;
+		};
+
+		const shuffleArray = <T>(array: T[]): T[] => {
+			const shuffled = [...array];
+			for (let i = shuffled.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+			}
+			return shuffled;
+		};
+
 		let bestSubset: Array<Proof> | null = null;
-		let bestFee = Infinity;
-		let bestSum = Infinity;
+		let bestCost = Infinity;
 
-		// Iterate all subsets
-		for (const subset of this.getAllSubsets(eligibleProofs)) {
-			// Check time/iteration limits
-			if (++iterationCount % checkInterval === 0) {
-				if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
-					console.warn(
-						`Time/iteration limit reached. ${
-							bestSubset ? 'Returning best subset.' : 'No suitable subset found.'
-						}`
-					);
-					break;
+		for (let trial = 0; trial < MAX_TRIALS; trial++) {
+			let S: Array<Proof> = [];
+			let remaining = shuffleArray(eligibleProofs);
+			while (remaining.length > 0 && adjustedSum(S) < amountToSend) {
+				const p = remaining.shift()!;
+				S.push(p);
+			}
+
+			let improved = true;
+			while (improved) {
+				improved = false;
+
+				// Swap step
+				const SArray = [...S];
+				for (const p of SArray) {
+					const others = eligibleProofs.filter((q) => !S.includes(q));
+					for (const q of others) {
+						const SNew = S.filter((proof) => proof !== p).concat(q);
+						if (cost(SNew) < cost(S)) {
+							S = SNew;
+							improved = true;
+							break;
+						}
+					}
+					if (improved) break;
+				}
+
+				// Removal step
+				if (!improved) {
+					for (const p of SArray) {
+						const SNew = S.filter((proof) => proof !== p);
+						if (adjustedSum(SNew) >= amountToSend && cost(SNew) < cost(S)) {
+							S = SNew;
+							improved = true;
+							break;
+						}
+					}
 				}
 			}
 
-			// Calculate sum and fee, and ignore invalid subsets
-			const sum = subset.reduce((acc, proof) => acc + proof.amount, 0);
-			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
-			const adjustedAmount = sum - fee;
-			if (exactMatch && adjustedAmount !== amountToSend) {
-				continue;
-			}
-			if (!exactMatch && adjustedAmount < amountToSend) {
-				continue;
-			}
-
-			// Better subset: lower fee or same fee with closer sum to target
-			if (fee < bestFee || (fee === bestFee && sum < bestSum)) {
-				bestSubset = subset;
-				bestFee = fee;
-				bestSum = sum;
-
-				// Early return for exactMatch if fees are zero (can't get better!)
-				if (exactMatch && bestFee === 0) {
-					return {
-						keep: proofs.filter((p) => !bestSubset.includes(p)),
-						send: bestSubset
-					};
-				}
+			const currentCost = cost(S);
+			if (currentCost < bestCost) {
+				bestSubset = [...S];
+				bestCost = currentCost;
+				if (exactMatch && currentCost === 0) break;
 			}
 		}
 
-		// Return best subset or empty result
-		if (bestSubset) {
+		if (exactMatch && bestCost !== 0) {
+			return { keep: proofs, send: [] };
+		}
+
+		if (bestSubset && bestCost < Infinity) {
+			console.log(
+				'bestSubset',
+				bestSubset.map((p) => p.amount)
+			);
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
 				send: bestSubset
 			};
 		}
-
 		return { keep: proofs, send: [] };
-	}
-
-	/**
-	 * Interleaves proofs by grouping and sorting them by amount in ascending order.
-	 * The aim is to provide a spread of amounts to make finding a subset faster.
-	 * Eg: for proof amounts [1,1,2,2,4,8], returns proofs ordered as [1,2,4,1,2,8,...].
-	 * @param proofs - Array of proofs to interleave.
-	 * @returns Array of proofs interleaved by amount
-	 */
-	private interleaveProofsByAmount(proofs: Array<Proof>): Array<Proof> {
-		// Group proofs by amount
-		const amountGroups = new Map<number, Proof[]>();
-		for (const proof of proofs) {
-			if (!amountGroups.has(proof.amount)) {
-				amountGroups.set(proof.amount, []);
-			}
-			amountGroups.get(proof.amount)!.push(proof);
-		}
-		// Sort amounts ascending, as the generator uses recursion
-		const sortedAmounts = Array.from(amountGroups.keys()).sort((a, b) => a - b);
-		const result: Proof[] = [];
-		let index = 0;
-		// Interleave proofs from each amount group
-		while (result.length < proofs.length) {
-			for (const amount of sortedAmounts) {
-				const group = amountGroups.get(amount)!;
-				if (index < group.length) {
-					result.push(group[index]);
-				}
-			}
-			index++;
-		}
-		return result;
-	}
-
-	/**
-	 * Generates all possible non-empty subsets of the given array of proofs.
-	 *
-	 * Recursively creates subsets by either including or excluding each proof in the array.
-	 * Yields subsets incrementally, allowing memory-efficient processing.
-	 *
-	 * @param proofs - The array of Proof objects from which subsets are generated.
-	 * @yields An array representing a non-empty subset of the input proofs.
-	 *
-	 * @remarks
-	 * - The input is interleaved and capped at 25 proofs to ensure performance.
-	 * - The order of subsets is not guaranteed and depends on the recursive traversal.
-	 * - Only subsets with at least one element are yielded.
-	 * - The time complexity is O(2^n), where n is the capped proof count (≤ 25).
-	 * - The cap ensures practical performance while leveraging interleaving for good results.
-	 */
-	private *getAllSubsets(proofs: Array<Proof>): Generator<Array<Proof>> {
-		// Interleave proofs to prioritize diverse amounts and cap number of
-		// proofs to prevent exponential explosion.
-		const MAX_PROOFS = 25;
-		const interleavedProofs = this.interleaveProofsByAmount(proofs);
-		const cappedProofs = interleavedProofs.slice(0, MAX_PROOFS);
-		console.log(
-			'cappedProofs',
-			cappedProofs.map((p) => p.amount)
-		);
-
-		// Generate subsets from capped proofs
-		function* generate(current: Array<Proof>, index: number): Generator<Array<Proof>> {
-			if (index === cappedProofs.length) {
-				if (current.length > 0) {
-					yield [...current];
-				}
-				return;
-			}
-			yield* generate(current, index + 1); // Exclude current proof
-			current.push(cappedProofs[index]);
-			yield* generate(current, index + 1); // Include current proof
-			current.pop();
-		}
-		yield* generate([], 0);
 	}
 
 	/**

@@ -1060,6 +1060,7 @@ describe('Test coinselection', () => {
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		const fee = wallet.getFeesForProofs(send);
 		// Fee = ceil(3 * 1000 / 1000) = 3, net = 34 - 3 = 31
+		console.log('optimal:>>', [16, 16, 2]);
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(34);
 		expect(amountSend - fee).toBe(targetAmount);
@@ -1079,6 +1080,7 @@ describe('Test coinselection', () => {
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		const fee = wallet.getFeesForProofs(send);
 		// Fee = ceil(3 * 600 / 1000) = 2, net = 33 - 2 = 31
+		console.log('optimal:>>', [16, 16, 1]);
 		expect(send).toHaveLength(3);
 		expect(amountSend).toBe(33);
 		expect(amountSend - fee).toBe(targetAmount);
@@ -1301,6 +1303,7 @@ describe('Test coinselection', () => {
 		const targetAmount = 20;
 		const { send } = wallet.selectProofsToSend(proofs, targetAmount, true, false);
 		const fee = wallet.getFeesForProofs(send);
+		console.log(send.map((p) => [p.amount, p.id]));
 		expect(send.every((p) => p.id === '00low')).toBe(true); // Prefer low-fee keyset
 		expect(send.reduce((a, p) => a + p.amount, 0) - fee).toBeGreaterThanOrEqual(targetAmount);
 	});
