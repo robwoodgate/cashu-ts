@@ -1442,6 +1442,34 @@ describe('Test coinselection', () => {
 		// Check efficiency: should ideally use around 50 proofs or fewer if larger proofs were available
 		expect(send.length).toBeLessThanOrEqual(50);
 	});
+	test('exorbitant input fees (10 sats per proof)', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [{ id: '009a1f293253e41e', unit: 'sat', active: true, input_fee_ppk: 10000 }]
+				});
+			})
+		);
+		const keysets = await mint.getKeySets();
+		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
+		const targetAmount = 5;
+		const { send } = wallet.selectProofsToSend(
+			notes,
+			targetAmount,
+			true, // includeFees
+			false // exact match
+		);
+		const fee = wallet.getFeesForProofs(send);
+		console.log(
+			'send:',
+			send.map((p) => p.amount)
+		);
+		console.log('fee:', fee);
+		expect(send.length).toBe(1);
+		expect(send[0].amount).toBe(16);
+		// 16 - ceil(10000/1000) = 16 - 10 = 6 >= 5
+		expect(send.reduce((a, p) => a + p.amount, 0) - fee).toBeGreaterThanOrEqual(targetAmount);
+	});
 });
 
 function expectNUT10SecretDataToEqual(p: Array<Proof>, s: string) {

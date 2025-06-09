@@ -411,19 +411,21 @@ class CashuWallet {
 		const maxIterations = 1000000; // Max 1M iterations
 		let iterationCount = 0;
 
-		// Find the smallest proof larger than amountToSend to set an upper bound.
-		// Exclude proofs above this bound, as they can't form an optimal subset
-		const nextBiggerProof = proofs
-			.filter((p) => p.amount > amountToSend)
-			.reduce((min, p) => (p.amount < min.amount ? p : min), { amount: Infinity });
-		const eligibleProofs = proofs.filter((p) => p.amount <= nextBiggerProof.amount);
+		// Filter economically unspendable proofs
+		const eligibleProofs = includeFees
+			? proofs.filter((p) => p.amount >= Math.ceil(this.getProofFeePPK(p) / 1000))
+			: proofs;
 
 		// Check total sum of eligible proofs is large enough to get a result
-	    const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
-	    const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
-	    if (totalSum < amountToSend + maxFee) {
-	        return { keep: proofs, send: [] };
-	    }
+		const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
+		if (exactMatch) {
+			const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
+			if (totalSum < amountToSend + maxFee) {
+				return { keep: proofs, send: [] };
+			}
+		} else if (totalSum < amountToSend) {
+			return { keep: proofs, send: [] };
+		}
 
 		// Initialize best result
 		let bestSubset: Array<Proof> | null = null;
@@ -444,27 +446,18 @@ class CashuWallet {
 				}
 			}
 
-			// Calculate sum and fee
+			// Calculate sum and fee, and ignore invalid subsets
 			const sum = subset.reduce((acc, proof) => acc + proof.amount, 0);
 			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
 			const adjustedAmount = sum - fee;
-
-			// Skip if sum is too low
-			if (sum < amountToSend + fee) {
-				continue;
-			}
-
-			// Exact match: adjusted amount must equal target
 			if (exactMatch && adjustedAmount !== amountToSend) {
 				continue;
 			}
-
-			// Non-exact match: adjusted amount must at least equal target
 			if (!exactMatch && adjustedAmount < amountToSend) {
 				continue;
 			}
 
-			// Better subset found: lower fee or same fee with lower sum (for Non-exact match))
+			// Better subset: lower fee or same fee with closer sum to target
 			if (fee < bestFee || (fee === bestFee && sum < bestSum)) {
 				bestSubset = subset;
 				bestFee = fee;
@@ -543,8 +536,9 @@ class CashuWallet {
 	private *getAllSubsets(proofs: Array<Proof>): Generator<Array<Proof>> {
 		// Interleave proofs to prioritize diverse amounts and cap number of
 		// proofs to prevent exponential explosion.
+		const MAX_PROOFS = 25;
 		const interleavedProofs = this.interleaveProofsByAmount(proofs);
-		const cappedProofs = interleavedProofs.slice(0, 25);
+		const cappedProofs = interleavedProofs.slice(0, MAX_PROOFS);
 		console.log(
 			'cappedProofs',
 			cappedProofs.map((p) => p.amount)
