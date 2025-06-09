@@ -401,24 +401,23 @@ class CashuWallet {
 		includeFees: boolean = false,
 		exactMatch: boolean = false
 	): SendResponse {
-		// RGLI tweaking constants
-		const MAX_TRIALS = 500;
-		const PROOF_COUNT_PENALTY = 1;
-		const FEE_PENALTY = 10;
+		// RGLI constants
+		const MAX_TRIALS = 50; // Number of trials for RGLI
+		const PROOF_COUNT_PENALTY = 1; // see cost function
+		const FEE_PENALTY = 10; // see cost function
 
-		console.log(
-			'proofs',
-			proofs.map((p) => p.amount)
-		);
-
+		// Handle invalid amount
 		if (amountToSend <= 0) {
 			return { keep: proofs, send: [] };
 		}
 
+		// Remove any proofs that are uneconomical to spend because of fees
+		// if we are covering the fees. Otherwise we can leave them in.
 		const eligibleProofs = includeFees
-			? proofs.filter((p) => p.amount > this.getProofFeePPK(p) / 1000)
+			? proofs.filter((p) => p.amount > Math.ceil(this.getProofFeePPK(p) / 1000))
 			: proofs;
 
+		// Helper functions
 		const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
 		if (exactMatch) {
 			const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
@@ -428,29 +427,22 @@ class CashuWallet {
 		} else if (totalSum < amountToSend) {
 			return { keep: proofs, send: [] };
 		}
-
-		console.log(
-			'eligibleProofs',
-			eligibleProofs.map((p) => p.amount)
-		);
-
 		const adjustedSum = (S: Array<Proof>): number => {
 			const totalAmount = S.reduce((acc, p) => acc + p.amount, 0);
 			const fees = includeFees ? this.getFeesForProofs(S) : 0;
 			return totalAmount - fees;
 		};
-
 		const cost = (S: Array<Proof>): number => {
-			const adj = adjustedSum(S); // Total amount minus fees
+			const adj = adjustedSum(S);
 			if (exactMatch) {
-				return adj === amountToSend ? 0 : Infinity;
+				// "Cost" to minimize for exact match is the proof count!
+				return adj === amountToSend ? S.length : Infinity;
 			}
-			if (adj < amountToSend) return Infinity;
+			if (adj < amountToSend) return Infinity; // Reject if below target
 			const excess = adj - amountToSend;
 			const feeCost = includeFees ? this.getFeesForProofs(S) : 0;
 			return excess + feeCost * FEE_PENALTY + PROOF_COUNT_PENALTY * S.length;
 		};
-
 		const shuffleArray = <T>(array: T[]): T[] => {
 			const shuffled = [...array];
 			for (let i = shuffled.length - 1; i > 0; i--) {
@@ -460,66 +452,105 @@ class CashuWallet {
 			return shuffled;
 		};
 
+		// Init vars for best solution
 		let bestSubset: Array<Proof> | null = null;
 		let bestCost = Infinity;
 
+		// Run multiple trials
 		for (let trial = 0; trial < MAX_TRIALS; trial++) {
+			// Phase 1: Randomized Greedy Selection
+			// up to amountToSend (adjusting for fees)
 			let S: Array<Proof> = [];
-			let remaining = shuffleArray(eligibleProofs);
-			while (remaining.length > 0 && adjustedSum(S) < amountToSend) {
-				const p = remaining.shift()!;
-				S.push(p);
+			let shuffledProofs = shuffleArray(eligibleProofs);
+			for (const p of shuffledProofs) {
+				const newS = [...S, p];
+				const newAdjSum = adjustedSum(newS);
+				if (exactMatch) {
+					if (newAdjSum <= amountToSend) {
+						S = newS;
+						if (newAdjSum === amountToSend) break; // Stop at exact match
+					}
+				} else {
+					S = newS; // Add proof regardless, will refine later
+				}
 			}
+			// console.log('eligibleProofs', eligibleProofs.map((p)=>p.amount));
+			// console.log('S', S.map((p)=>p.amount));
+			// console.log('amountToSend', amountToSend);
+			// console.log('S sum', S.reduce((acc, p) => acc + p.amount, 0));
 
+
+			// Phase 2: Local Improvement
 			let improved = true;
 			while (improved) {
 				improved = false;
 
-				// Swap step
-				const SArray = [...S];
+				// Replacement step
+				const SArray = shuffleArray(S);
 				for (const p of SArray) {
 					const others = eligibleProofs.filter((q) => !S.includes(q));
-					for (const q of others) {
-						const SNew = S.filter((proof) => proof !== p).concat(q);
-						if (cost(SNew) < cost(S)) {
-							S = SNew;
+					const validReplacements = others
+						.filter((q) => {
+							const delta = q.amount - p.amount;
+							const newS = [...S.filter((proof) => proof !== p), q];
+							const newAdjSum = adjustedSum(newS);
+							return (
+								delta > 0 && (exactMatch ? newAdjSum <= amountToSend : newAdjSum >= amountToSend)
+							);
+						})
+						.sort((a, b) => b.amount - a.amount); // Largest first
+
+					if (validReplacements.length > 0) {
+						const q = validReplacements[0];
+						const newS = [...S.filter((proof) => proof !== p), q];
+						if (cost(newS) < cost(S)) {
+							S = newS;
 							improved = true;
 							break;
 						}
 					}
-					if (improved) break;
 				}
 
 				// Removal step
 				if (!improved) {
+					const SArray = shuffleArray(S);
 					for (const p of SArray) {
-						const SNew = S.filter((proof) => proof !== p);
-						if (adjustedSum(SNew) >= amountToSend && cost(SNew) < cost(S)) {
-							S = SNew;
+						const newS = S.filter((proof) => proof !== p);
+						const newAdjSum = adjustedSum(newS);
+						if (
+							(exactMatch ? newAdjSum === amountToSend : newAdjSum >= amountToSend) &&
+							cost(newS) < cost(S)
+						) {
+							S = newS;
 							improved = true;
 							break;
 						}
 					}
 				}
+
+				if (exactMatch && adjustedSum(S) === amountToSend) {
+					break; // Exit if exact match achieved
+				}
 			}
 
+			// Update best solution
 			const currentCost = cost(S);
 			if (currentCost < bestCost) {
 				bestSubset = [...S];
 				bestCost = currentCost;
-				if (exactMatch && currentCost === 0) break;
+				if (exactMatch && adjustedSum(S) === amountToSend && currentCost === S.length) {
+					break; // Optimal exact match found
+				}
 			}
 		}
 
-		if (exactMatch && bestCost !== 0) {
+		// Validate exact match requirement
+		if (exactMatch && (!bestSubset || adjustedSum(bestSubset) !== amountToSend)) {
 			return { keep: proofs, send: [] };
 		}
 
+		// Return result
 		if (bestSubset && bestCost < Infinity) {
-			console.log(
-				'bestSubset',
-				bestSubset.map((p) => p.amount)
-			);
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
 				send: bestSubset
