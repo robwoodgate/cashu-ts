@@ -1037,6 +1037,10 @@ describe('Test coinselection', () => {
 			true, // includeFees
 			false // no exact match
 		);
+		console.log(
+			'send',
+			send.map((p) => p.amount)
+		);
 		expect(send).toHaveLength(2);
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(24);
@@ -1394,14 +1398,14 @@ describe('Test coinselection', () => {
 
 		// Non-Exact Match Test
 		const targetAmountNonExact = 127;
-		console.time('largeProofsNonExactTest');
+		console.time('largeProofsClosestTest');
 		const { send: sendNonExact } = wallet.selectProofsToSend(
 			allNotes,
 			targetAmountNonExact,
 			true, // includeFees
 			false // non-exact match
 		);
-		console.timeEnd('largeProofsNonExactTest');
+		console.timeEnd('largeProofsClosestTest');
 		const amountSendNonExact = sendNonExact.reduce((acc, p) => acc + p.amount, 0);
 		const feeNonExact = wallet.getFeesForProofs(sendNonExact);
 		console.log(

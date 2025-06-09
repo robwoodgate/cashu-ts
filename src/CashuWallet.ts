@@ -386,11 +386,11 @@ class CashuWallet {
 	}
 
 	/**
-	 * Selects proofs to send based on the amount, fee inclusion preference, and exact match requirement.
+	 * Selects proofs to send based on amount, fee inclusion, and exact match requirement.
 	 * @param proofs Array of Proof objects available to select from
 	 * @param amountToSend The target amount to send
-	 * @param includeFees Optional boolean to include fees in the calculation; Default: false
-	 * @param exactMatch Optional boolean to require an exact match; Default: false
+	 * @param includeFees Optional boolean to include fees; Default: false
+	 * @param exactMatch Optional boolean to require exact match; Default: false
 	 * @returns SendResponse containing proofs to keep and proofs to send
 	 */
 	selectProofsToSend(
@@ -399,88 +399,98 @@ class CashuWallet {
 		includeFees: boolean = false,
 		exactMatch: boolean = false
 	): SendResponse {
-		// Handle invalid or zero amount case
+		// Handle invalid or zero amount
 		if (amountToSend <= 0) {
 			return { keep: proofs, send: [] };
 		}
 
-		// Set Guardrails
+		// Set Search Guardrails
 		const startTime = Date.now();
-		const timeLimit = 1000; // 1 second in milliseconds
-		const checkInterval = 10000; // Check time every 10,000 iterations
-		const maxIterations = 1000000; // Hard limit: 1 million iterations
+		const timeLimit = 1000; // 1 second
+		const checkInterval = 10000; // Check every 10,000 iterations
+		const maxIterations = 1000000; // Max 1M iterations
 		let iterationCount = 0;
-		// Remove all proofs with amount higher than next bigger proof
+
+		// Find the smallest proof larger than amountToSend to set an upper bound.
+		// Exclude proofs above this bound, as they can't form an optimal subset
 		const nextBiggerProof = proofs
 			.filter((p) => p.amount > amountToSend)
 			.reduce((min, p) => (p.amount < min.amount ? p : min), { amount: Infinity });
-		console.log(
-			'nextBiggerProof',
-			[nextBiggerProof].map((p) => p.amount)
-		);
 		const eligibleProofs = proofs.filter((p) => p.amount <= nextBiggerProof.amount);
-		console.log(
-			'eligibleProofs',
-			eligibleProofs.map((p) => p.amount)
-		);
 
-		// Exact match: find the first subset that satisfies the condition
-		if (exactMatch) {
-			for (const subset of this.getAllSubsets(eligibleProofs)) {
-				if (++iterationCount % checkInterval === 0) {
-					if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
-						console.warn('Time limit reached for exact match. No match found.');
-						return { keep: proofs, send: [] };
-					}
-				}
-				const sum = subset.reduce((acc, proof) => acc + proof.amount, 0);
-				const adjustedAmount = includeFees ? sum - this.getFeesForProofs(subset) : sum;
-				if (adjustedAmount === amountToSend) {
-					return {
-						keep: proofs.filter((proof) => !subset.includes(proof)),
-						send: subset
-					};
-				}
-			}
-			// No exact match found
-			return { keep: proofs, send: [] };
-		}
+		// Check total sum of eligible proofs is large enough to get a result
+	    const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
+	    const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
+	    if (totalSum < amountToSend + maxFee) {
+	        return { keep: proofs, send: [] };
+	    }
 
-		// Non-exact match: find the best subset, stop optimizing after time limit
+		// Initialize best result
 		let bestSubset: Array<Proof> | null = null;
 		let bestFee = Infinity;
 		let bestSum = Infinity;
+
+		// Iterate all subsets
 		for (const subset of this.getAllSubsets(eligibleProofs)) {
-			// Check limits periodically
-			if (
-				++iterationCount % checkInterval === 0 &&
-				(Date.now() - startTime > timeLimit || iterationCount >= maxIterations)
-			) {
-				console.warn(
-					`Time or iteration limit reached. ${
-						bestSubset ? 'Returning best subset found.' : 'No suitable subset found.'
-					}`
-				);
-				break; // Exit the loop immediately
+			// Check time/iteration limits
+			if (++iterationCount % checkInterval === 0) {
+				if (Date.now() - startTime > timeLimit || iterationCount >= maxIterations) {
+					console.warn(
+						`Time/iteration limit reached. ${
+							bestSubset ? 'Returning best subset.' : 'No suitable subset found.'
+						}`
+					);
+					break;
+				}
 			}
-			// Process subset
-			const sum = subset.reduce((a, p) => a + p.amount, 0);
+
+			// Calculate sum and fee
+			const sum = subset.reduce((acc, proof) => acc + proof.amount, 0);
 			const fee = includeFees ? this.getFeesForProofs(subset) : 0;
-			if (sum >= amountToSend + fee && (fee < bestFee || (fee === bestFee && sum < bestSum))) {
+			const adjustedAmount = sum - fee;
+
+			// Skip if sum is too low
+			if (sum < amountToSend + fee) {
+				continue;
+			}
+
+			// Exact match: adjusted amount must equal target
+			if (exactMatch && adjustedAmount !== amountToSend) {
+				continue;
+			}
+
+			// Non-exact match: adjusted amount must at least equal target
+			if (!exactMatch && adjustedAmount < amountToSend) {
+				continue;
+			}
+
+			// Better subset found: lower fee or same fee with lower sum (for Non-exact match))
+			if (fee < bestFee || (fee === bestFee && sum < bestSum)) {
 				bestSubset = subset;
 				bestFee = fee;
 				bestSum = sum;
+
+				// Early return for exactMatch if fees are zero (can't get better!)
+				if (exactMatch && bestFee === 0) {
+					return {
+						keep: proofs.filter((p) => !bestSubset.includes(p)),
+						send: bestSubset
+					};
+				}
 			}
 		}
+
+		// Return best subset or empty result
 		if (bestSubset) {
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
 				send: bestSubset
 			};
 		}
-		// No suitable subset found
+
 		return { keep: proofs, send: [] };
 	}
+
 	/**
 	 * Interleaves proofs by grouping and sorting them by amount in ascending order.
 	 * The aim is to provide a spread of amounts to make finding a subset faster.
@@ -497,7 +507,7 @@ class CashuWallet {
 			}
 			amountGroups.get(proof.amount)!.push(proof);
 		}
-		// Sort amounts ascending
+		// Sort amounts ascending, as the generator uses recursion
 		const sortedAmounts = Array.from(amountGroups.keys()).sort((a, b) => a - b);
 		const result: Proof[] = [];
 		let index = 0;
@@ -518,36 +528,38 @@ class CashuWallet {
 	 * Generates all possible non-empty subsets of the given array of proofs.
 	 *
 	 * Recursively creates subsets by either including or excluding each proof in the array.
-	 * Yields subsets incrementally, allowing memory-efficient processing of large input sets.
+	 * Yields subsets incrementally, allowing memory-efficient processing.
 	 *
 	 * @param proofs - The array of Proof objects from which subsets are generated.
 	 * @yields An array representing a non-empty subset of the input proofs.
 	 *
 	 * @remarks
-	 * - The input array is filtered to include at most 4 proofs per unique amount
+	 * - The input is interleaved and capped at 25 proofs to ensure performance.
 	 * - The order of subsets is not guaranteed and depends on the recursive traversal.
 	 * - Only subsets with at least one element are yielded.
-	 * - The time complexity is O(2^n), where n is the length of the filtered proofs array.
-	 * - Small input arrays are better, as the number of subsets grows exponentially with input size.
+	 * - The time complexity is O(2^n), where n is the capped proof count (≤ 25).
+	 * - The cap ensures practical performance while leveraging interleaving for good results.
 	 */
 	private *getAllSubsets(proofs: Array<Proof>): Generator<Array<Proof>> {
-		// Interleave the proof array to give us a good starting selection
+		// Interleave proofs to prioritize diverse amounts and cap number of
+		// proofs to prevent exponential explosion.
 		const interleavedProofs = this.interleaveProofsByAmount(proofs);
+		const cappedProofs = interleavedProofs.slice(0, 25);
 		console.log(
-			'interleavedProofs',
-			interleavedProofs.map((p) => p.amount)
+			'cappedProofs',
+			cappedProofs.map((p) => p.amount)
 		);
 
-		// Generate subsets from filtered proofs using a generator
+		// Generate subsets from capped proofs
 		function* generate(current: Array<Proof>, index: number): Generator<Array<Proof>> {
-			if (index === interleavedProofs.length) {
+			if (index === cappedProofs.length) {
 				if (current.length > 0) {
 					yield [...current];
 				}
 				return;
 			}
 			yield* generate(current, index + 1); // Exclude current proof
-			current.push(interleavedProofs[index]);
+			current.push(cappedProofs[index]);
 			yield* generate(current, index + 1); // Include current proof
 			current.pop();
 		}
