@@ -416,9 +416,8 @@ class CashuWallet {
 			? proofs.filter((p) => p.amount >= Math.ceil(this.getProofFeePPK(p) / 1000))
 			: proofs;
 
-		// Ensure totalSum allows viable selection covers amountToSend:
+		// Ensure sum of proofs covers at least amountToSend...
 		// - exactMatch: plus worst-case fees for precision.
-		// - closeMatch: fees are covered by overages in the subset selection
 		const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
 		if (exactMatch) {
 			const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
