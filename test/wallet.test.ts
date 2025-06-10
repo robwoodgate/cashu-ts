@@ -1494,47 +1494,6 @@ describe('Test coinselection', () => {
 		// 16 - ceil(10000/1000) = 16 - 10 = 6 >= 5
 		expect(send.reduce((a, p) => a + p.amount, 0) - fee).toBeGreaterThanOrEqual(targetAmount);
 	});
-});
-
-describe('Lollerfirst: Test coinselection with subset-sum', () => {
-	const notes = [
-		{
-			id: '009a1f293253e41e',
-			amount: 2,
-			secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
-			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
-		},
-		{
-			id: '009a1f293253e41e',
-			amount: 8,
-			secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
-			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
-		},
-		{
-			id: '009a1f293253e41e',
-			amount: 16,
-			secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
-			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
-		},
-		{
-			id: '009a1f293253e41e',
-			amount: 16,
-			secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
-			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
-		},
-		{
-			id: '009a1f293253e41e',
-			amount: 1,
-			secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
-			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
-		},
-		{
-			id: '009a1f293253e41e',
-			amount: 1,
-			secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
-			C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be'
-		}
-	];
 	test('optimal offline coinselection', async () => {
 		const wallet = new CashuWallet(mint, { unit });
 		const targetAmount = 25;
@@ -1616,7 +1575,21 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend).toBe(33);
 	});
-	test('aggressive coinselection with huge proofsets', async () => {
+	test('aggressive coinselection with huge proofsets and fees', async () => {
+		server.use(
+			http.get(mintUrl + '/v1/keysets', () => {
+				return HttpResponse.json({
+					keysets: [
+						{
+							id: '009a1f293253e41e',
+							unit: 'sat',
+							active: true,
+							input_fee_ppk: 600
+						}
+					]
+				});
+			})
+		);
 		let proofs: Array<Proof> = [];
 		for (let i = 0; i < 100; ++i) {
 			const bytes = randomBytes(1);
@@ -1649,16 +1622,12 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 		// Non-exact match test
 		console.time('selectProofs-fees-closest');
 		({ send } = wallet.selectProofsToSend(
-					proofs,
-					amountToSend,
-					true, // includeFees
-					false // no exact match
-				));
+			proofs,
+			amountToSend,
+			true, // includeFees
+			false // no exact match
+		));
 		console.timeEnd('selectProofs-fees-closest');
-		console.log(
-			'send:>>',
-			send.map((p) => p.amount)
-		);
 		fee = wallet.getFeesForProofs(send);
 		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
@@ -1666,16 +1635,12 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 		// Exact match test
 		console.time('selectProofs-fees-exact');
 		({ send, keep } = wallet.selectProofsToSend(
-					proofs,
-					amountToSend,
-					true, // includeFees
-					true // exact match
-				));
+			proofs,
+			amountToSend,
+			true, // includeFees
+			true // exact match
+		));
 		console.timeEnd('selectProofs-fees-exact');
-		console.log(
-			'sendExact:>>',
-			send.map((p) => p.amount)
-		);
 		amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
 		fee = wallet.getFeesForProofs(send);
 		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
@@ -1689,48 +1654,38 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 			expect(send).toHaveLength(0);
 		}
 
-		// Lollerfirst FUNCTION:
+		// Lollerfirst's DP version - selectProofsToSendV2:
 
-		// Non-exact match test
-		console.time('selectProofsv2-fees-closest');
-		({ send } = wallet.selectProofsToSendV2(
-					proofs,
-					amountToSend,
-					true, // includeFees
-				));
-		console.timeEnd('selectProofsv2-fees-closest');
-		console.log(
-			'send:>>',
-			send.map((p) => p.amount)
-		);
-		fee = wallet.getFeesForProofs(send);
-		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-		expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
-
-		// Exact match test
-		console.time('selectProofsv2-fees-exact');
-		({ send, keep } = wallet.selectProofsToSendV2(
-					proofs,
-					amountToSend,
-					true, // includeFees
-				));
-		console.timeEnd('selectProofsv2-fees-exact');
-		console.log(
-			'sendExact:>>',
-			send.map((p) => p.amount)
-		);
-		amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
-		fee = wallet.getFeesForProofs(send);
-		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-
-		if (send.length > 0) {
-			// Exact match found
-			expect(amountSend - fee).toEqual(amountToSend);
-		} else {
-			// No exact match possible, all proofs kept
-			expect(amountKeep).toEqual(totalAmount);
-			expect(send).toHaveLength(0);
-		}
+		// // Non-exact match test
+		// console.time('selectProofsv2-fees-closest');
+		// ({ send } = wallet.selectProofsToSendV2(
+		// 			proofs,
+		// 			amountToSend,
+		// 			true, // includeFees
+		// 		));
+		// console.timeEnd('selectProofsv2-fees-closest');
+		// fee = wallet.getFeesForProofs(send);
+		// amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		// expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
+		// // Exact match test
+		// console.time('selectProofsv2-fees-exact');
+		// ({ send, keep } = wallet.selectProofsToSendV2(
+		// 			proofs,
+		// 			amountToSend,
+		// 			true, // includeFees
+		// 		));
+		// console.timeEnd('selectProofsv2-fees-exact');
+		// amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
+		// fee = wallet.getFeesForProofs(send);
+		// amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		// if (send.length > 0) {
+		// 	// Exact match found
+		// 	expect(amountSend - fee).toEqual(amountToSend);
+		// } else {
+		// 	// No exact match possible, all proofs kept
+		// 	expect(amountKeep).toEqual(totalAmount);
+		// 	expect(send).toHaveLength(0);
+		// }
 	});
 });
 
