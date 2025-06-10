@@ -1639,52 +1639,54 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const amountToSend = Math.floor((Math.random() * totalAmount) / 2 + totalAmount / 2);
 
-		// Reuseable vars
+		// Reusable vars
+		let amountSend;
+		let amountKeep;
 		let send;
 		let keep;
 		let fee;
 
 		// Non-exact match test
 		console.time('selectProofs-fees-closest');
-		let { send } = wallet.selectProofsToSend(
-			proofs,
-			amountToSend,
-			true, // includeFees
-			false // no exact match
-		);
+		({ send } = wallet.selectProofsToSend(
+					proofs,
+					amountToSend,
+					true, // includeFees
+					false // no exact match
+				));
 		console.timeEnd('selectProofs-fees-closest');
 		console.log(
 			'send:>>',
 			send.map((p) => p.amount)
 		);
-		const fee = wallet.getFeesForProofs(send);
-		const amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		fee = wallet.getFeesForProofs(send);
+		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 		expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
 
 		// Exact match test
 		console.time('selectProofs-fees-exact');
-		const { send: sendExact, keep } = wallet.selectProofsToSend(
-			proofs,
-			amountToSend,
-			true, // includeFees
-			true // exact match
-		);
+		({ send, keep } = wallet.selectProofsToSend(
+					proofs,
+					amountToSend,
+					true, // includeFees
+					true // exact match
+				));
 		console.timeEnd('selectProofs-fees-exact');
 		console.log(
 			'sendExact:>>',
-			sendExact.map((p) => p.amount)
+			send.map((p) => p.amount)
 		);
-		const amountKeepExact = keep.reduce((acc, p) => acc + p.amount, 0);
-		const feeExact = wallet.getFeesForProofs(sendExact);
-		const amountSendExact = sendExact.reduce((acc, p) => acc + p.amount, 0);
+		amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
+		fee = wallet.getFeesForProofs(send);
+		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
 
-		if (sendExact.length > 0) {
+		if (send.length > 0) {
 			// Exact match found
-			expect(amountSendExact - feeExact).toEqual(amountToSend);
+			expect(amountSend - fee).toEqual(amountToSend);
 		} else {
 			// No exact match possible, all proofs kept
-			expect(amountKeepExact).toEqual(totalAmount);
-			expect(sendExact).toHaveLength(0);
+			expect(amountKeep).toEqual(totalAmount);
+			expect(send).toHaveLength(0);
 		}
 	});
 });
