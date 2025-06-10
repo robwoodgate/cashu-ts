@@ -387,8 +387,10 @@ class CashuWallet {
 
 	/**
 	 * Selects proofs to send based on amount, fee inclusion, and exact match requirement.
-	 * Uses an adapted RGLI algorithm with multiple trials of randomized greedy selection
-	 * followed by local improvement.
+	 * Uses an adapted Randomized Greedy with Local Improvement (RGLI) algorithm that
+	 * seeks to minimize fees and proof selections if required.
+	 * @see https://crypto.ethz.ch/publications/files/Przyda02.pdf
+	 * @remarks RGLI has time complexity O(nlog n) and space complexity O(n).
 	 * @param proofs Array of Proof objects available to select from
 	 * @param amountToSend The target amount to send
 	 * @param includeFees Optional boolean to include fees; Default: false
@@ -401,47 +403,37 @@ class CashuWallet {
 		includeFees: boolean = false,
 		exactMatch: boolean = false
 	): SendResponse {
-		// RGLI constants
-		const MAX_TRIALS = 50; // Number of trials for RGLI
-		const PROOF_COUNT_PENALTY = 1; // see cost function
-		const FEE_PENALTY = 10; // see cost function
+		// Init vars
+		const MAX_TRIALS = 50; // 40-80 is optimal (per RGLI paper)
+		let bestSubset: Array<Proof> | null = null;
+		let bestCost = Infinity;
 
 		// Handle invalid amount
 		if (amountToSend <= 0) {
 			return { keep: proofs, send: [] };
 		}
 
-		// Remove any proofs that are uneconomical to spend because of fees
-		// if we are covering the fees. Otherwise we can leave them in.
+		// Remove any proofs that are uneconomical to spend if fees are included.
+		// Otherwise we can leave them in, as fees will be the receiver's problem.
 		const eligibleProofs = includeFees
-			? proofs.filter((p) => p.amount > Math.ceil(this.getProofFeePPK(p) / 1000))
+			? proofs.filter((p) => p.amount > this.getProofFeePPK(p) / 1000)
 			: proofs;
 
-		// Helper functions
-		const totalSum = eligibleProofs.reduce((sum, p) => sum + p.amount, 0);
-		if (exactMatch) {
-			const maxFee = includeFees ? this.getFeesForProofs(eligibleProofs) : 0;
-			if (totalSum < amountToSend + maxFee) {
-				return { keep: proofs, send: [] };
-			}
-		} else if (totalSum < amountToSend) {
-			return { keep: proofs, send: [] };
-		}
-		const adjustedSum = (S: Array<Proof>): number => {
+		/**
+		 * Helper functions
+		 */
+		const sumExFees = (S: Array<Proof>): number => {
 			const totalAmount = S.reduce((acc, p) => acc + p.amount, 0);
 			const fees = includeFees ? this.getFeesForProofs(S) : 0;
 			return totalAmount - fees;
 		};
 		const cost = (S: Array<Proof>): number => {
-			const adj = adjustedSum(S);
-			if (exactMatch) {
-				// "Cost" to minimize for exact match is the proof count!
-				return adj === amountToSend ? S.length : Infinity;
-			}
+			const adj = sumExFees(S);
 			if (adj < amountToSend) return Infinity; // Reject if below target
 			const excess = adj - amountToSend;
 			const feeCost = includeFees ? this.getFeesForProofs(S) : 0;
-			return excess + feeCost * FEE_PENALTY + PROOF_COUNT_PENALTY * S.length;
+			// "Cost" is the excess over target, plus a penalty for subset length and fees
+			return excess + feeCost * S.length;
 		};
 		const shuffleArray = <T>(array: T[]): T[] => {
 			const shuffled = [...array];
@@ -452,105 +444,113 @@ class CashuWallet {
 			return shuffled;
 		};
 
-		// Init vars for best solution
-		let bestSubset: Array<Proof> | null = null;
-		let bestCost = Infinity;
-
-		// Run multiple trials
+		/**
+		 * RGLI algorithm: Runs multiple trials (up to MAX_TRIALS)
+		 * Each trial starts with randomized greedy subset selection (S) and
+		 * then tries to improve that subset to get a valid solution.
+		 */
+		console.time('selectProofs-rgli-' + (exactMatch ? 'exactMatch' : 'closeMatch'));
 		for (let trial = 0; trial < MAX_TRIALS; trial++) {
-			// Phase 1: Randomized Greedy Selection
-			// up to amountToSend (adjusting for fees)
+			// PHASE 1: Randomized Greedy Selection
+			// up to amountToSend (after adjusting for fees) for exact match
+			// or the first amount over target for non-exact match
+			// console.time('selectProofs-phase1-trial-' + trial);
 			let S: Array<Proof> = [];
 			let shuffledProofs = shuffleArray(eligibleProofs);
 			for (const p of shuffledProofs) {
 				const newS = [...S, p];
-				const newAdjSum = adjustedSum(newS);
+				const newAdjSum = sumExFees(newS);
+				if (exactMatch && newAdjSum > amountToSend) {
+					break;
+				}
+				S = newS;
+				if (newAdjSum >= amountToSend) break;
+			}
+			// console.timeEnd('selectProofs-phase1-trial-' + trial);
+			// PHASE 2: Local Improvement
+			// Examine all the numbers found in the first phase, and find the
+			// largest number not in the current solution, which would get us
+			// closer to the amountToSend (exact match) or lowest cost otherwise
+			// console.time('selectProofs-phase2-trial-' + trial);
+			const shuffled_S = shuffleArray(S);
+			for (const p of shuffled_S) {
+				// Exact solution found
+				if (sumExFees(S) === amountToSend) {
+					console.log(trial+': Exact solution found: ', S.map((p)=>p.amount));
+					break;
+				}
+
+				// Init vars
+				const others = eligibleProofs.filter((q) => !S.includes(q));
+				let validReplacements = [];
+
 				if (exactMatch) {
-					if (newAdjSum <= amountToSend) {
-						S = newS;
-						if (newAdjSum === amountToSend) break; // Stop at exact match
+					// Valid replacements increase sumExFees but stay ≤ amountToSend
+					validReplacements = others.filter((q) => {
+						const newS = [...S.filter((proof) => proof !== p), q];
+						const newAdjSum = sumExFees(newS);
+						return newAdjSum > sumExFees(S) && newAdjSum <= amountToSend;
+					});
+					if (validReplacements.length > 0) {
+						// Select q maximizing sumExFees(newS), like max(T)
+						const q = validReplacements.reduce((best, current) => {
+							const bestNewS = [...S.filter((proof) => proof !== p), best];
+							const currentNewS = [...S.filter((proof) => proof !== p), current];
+							return cost(currentNewS) <= cost(bestNewS) &&
+								sumExFees(currentNewS) > sumExFees(bestNewS)
+								? current
+								: best;
+						});
+						S = [...S.filter((proof) => proof !== p), q];
 					}
 				} else {
-					S = newS; // Add proof regardless, will refine later
-				}
-			}
-			// console.log('eligibleProofs', eligibleProofs.map((p)=>p.amount));
-			// console.log('S', S.map((p)=>p.amount));
-			// console.log('amountToSend', amountToSend);
-			// console.log('S sum', S.reduce((acc, p) => acc + p.amount, 0));
-
-
-			// Phase 2: Local Improvement
-			let improved = true;
-			while (improved) {
-				improved = false;
-
-				// Replacement step
-				const SArray = shuffleArray(S);
-				for (const p of SArray) {
-					const others = eligibleProofs.filter((q) => !S.includes(q));
-					const validReplacements = others
-						.filter((q) => {
-							const delta = q.amount - p.amount;
-							const newS = [...S.filter((proof) => proof !== p), q];
-							const newAdjSum = adjustedSum(newS);
-							return (
-								delta > 0 && (exactMatch ? newAdjSum <= amountToSend : newAdjSum >= amountToSend)
-							);
-						})
-						.sort((a, b) => b.amount - a.amount); // Largest first
-
-					if (validReplacements.length > 0) {
-						const q = validReplacements[0];
+					// Valid replacements get us over amountToSend at least cost
+					const costS = cost(S);
+					validReplacements = others.filter((q) => {
 						const newS = [...S.filter((proof) => proof !== p), q];
-						if (cost(newS) < cost(S)) {
-							S = newS;
-							improved = true;
-							break;
-						}
+						const newAdjSum = sumExFees(newS);
+						return cost(newS) < costS && newAdjSum >= amountToSend;
+					});
+					if (validReplacements.length > 0) {
+						// Select q minimizing cost(newS)
+						const q = validReplacements.reduce((best, current) => {
+							const bestNewS = [...S.filter((proof) => proof !== p), best];
+							const currentNewS = [...S.filter((proof) => proof !== p), current];
+							return cost(currentNewS) < cost(bestNewS) ? current : best;
+						});
+						S = [...S.filter((proof) => proof !== p), q];
 					}
-				}
-
-				// Removal step
-				if (!improved) {
-					const SArray = shuffleArray(S);
-					for (const p of SArray) {
-						const newS = S.filter((proof) => proof !== p);
-						const newAdjSum = adjustedSum(newS);
-						if (
-							(exactMatch ? newAdjSum === amountToSend : newAdjSum >= amountToSend) &&
-							cost(newS) < cost(S)
-						) {
-							S = newS;
-							improved = true;
-							break;
-						}
-					}
-				}
-
-				if (exactMatch && adjustedSum(S) === amountToSend) {
-					break; // Exit if exact match achieved
 				}
 			}
+			// console.timeEnd('selectProofs-phase2-trial-' + trial);
 
 			// Update best solution
 			const currentCost = cost(S);
 			if (currentCost < bestCost) {
 				bestSubset = [...S];
 				bestCost = currentCost;
-				if (exactMatch && adjustedSum(S) === amountToSend && currentCost === S.length) {
-					break; // Optimal exact match found
-				}
+			}
+
+			// If not minimizing costs (!includeFees) or proof set is large (>50)
+			// then accept the valid solution already found (ie pure RGLI)
+			// Otherwise we can continue to iterate a while longer to minimize costs
+			if ((!includeFees || eligibleProofs.length > 50) && bestSubset && bestCost < Infinity) {
+				console.log(
+					'Using the solution found:',
+					S.reduce((acc, p) => acc + p.amount, 0)
+				);
+				break;
 			}
 		}
-
-		// Validate exact match requirement
-		if (exactMatch && (!bestSubset || adjustedSum(bestSubset) !== amountToSend)) {
-			return { keep: proofs, send: [] };
-		}
+		console.timeEnd('selectProofs-rgli-' + (exactMatch ? 'exactMatch' : 'closeMatch'));
 
 		// Return result
 		if (bestSubset && bestCost < Infinity) {
+			console.log('amountToSend', amountToSend);
+			console.log(
+				'RESULT:>>',
+				bestSubset.reduce((acc, p) => acc + p.amount, 0)
+			);
 			return {
 				keep: proofs.filter((p) => !bestSubset.includes(p)),
 				send: bestSubset
