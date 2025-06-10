@@ -1688,6 +1688,49 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 			expect(amountKeep).toEqual(totalAmount);
 			expect(send).toHaveLength(0);
 		}
+
+		// Lollerfirst FUNCTION:
+
+		// Non-exact match test
+		console.time('selectProofsv2-fees-closest');
+		({ send } = wallet.selectProofsToSendV2(
+					proofs,
+					amountToSend,
+					true, // includeFees
+				));
+		console.timeEnd('selectProofsv2-fees-closest');
+		console.log(
+			'send:>>',
+			send.map((p) => p.amount)
+		);
+		fee = wallet.getFeesForProofs(send);
+		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
+
+		// Exact match test
+		console.time('selectProofsv2-fees-exact');
+		({ send, keep } = wallet.selectProofsToSendV2(
+					proofs,
+					amountToSend,
+					true, // includeFees
+				));
+		console.timeEnd('selectProofsv2-fees-exact');
+		console.log(
+			'sendExact:>>',
+			send.map((p) => p.amount)
+		);
+		amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
+		fee = wallet.getFeesForProofs(send);
+		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+
+		if (send.length > 0) {
+			// Exact match found
+			expect(amountSend - fee).toEqual(amountToSend);
+		} else {
+			// No exact match possible, all proofs kept
+			expect(amountKeep).toEqual(totalAmount);
+			expect(send).toHaveLength(0);
+		}
 	});
 });
 
