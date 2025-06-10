@@ -559,6 +559,157 @@ class CashuWallet {
 		return { keep: proofs, send: [] };
 	}
 
+	selectProofsToSendV2(
+		proofs: Array<Proof>,
+		amountToSend: number,
+		includeFees?: boolean
+	): SendResponse {
+		let sortedProofs = [...proofs];
+		sortedProofs = sortedProofs.sort((a: Proof, b: Proof) => a.amount - b.amount);
+
+		const n = sortedProofs.length;
+
+		// Calculate sum series
+		const sumSeries: Array<number> = [];
+		const reverseSumSeries: Array<number> = [];
+		let cumulativeSum = 0;
+		let cumulativeReverseSum = 0;
+		for (let i=0; i<n; ++i) {
+			cumulativeSum += sortedProofs[i].amount;
+			sumSeries.push(cumulativeSum);
+			reverseSumSeries.push(cumulativeReverseSum);
+			cumulativeReverseSum += sortedProofs[n-1-i].amount;
+		}
+
+		if (sumSeries[n-1] < amountToSend) {
+			throw new Error("Not enough balance to cover this amount");
+		}
+
+		/**
+		 * SumState.
+		 * Maps a `sendValue` to a inclusion flag that indicates whether the current coin
+		 * has to be included in the solution
+		 * NOTE: The absence of a map means "There is no solution for this sendValue"
+		 */
+		type SumState = {
+			[key: number]: boolean;
+		};
+		const hashtables: Array<SumState> = new Array(n);
+
+		// Initialize each element of the hashtables array
+		for (let i = 0; i < n; i++) {
+			hashtables[i] = {}; // Initialize as an empty object
+		}
+
+		function computeTable(fromAmount: number, toAmount: number): Array<Proof> {
+			console.log(`### computeTable from ${fromAmount} to ${toAmount}.`);
+
+			// Start compiling the sub-set sum table
+			let iterations = 1;
+
+			for (let i = 0; i<n; ++i) {
+				const p = sortedProofs[i];
+
+				if (p.amount > toAmount) {
+					if (i>0) {
+						for (const key in hashtables[i-1]) {
+							hashtables[i][key] = false;
+						}
+					}
+				}
+
+				const cumulativeSum = sumSeries[i];
+				// Decide where to stop
+				const stop = Math.min(toAmount, cumulativeSum);
+				let currentAmount = fromAmount;
+
+				for (; currentAmount <= stop; ++currentAmount) {
+					iterations++;
+
+					// If the amount of a single proof does not exceed the currentAmount
+					// then check if a solution exist when we include it.
+					if (p.amount <= currentAmount) {
+						const remainingAmount = currentAmount - p.amount;
+						if (remainingAmount === 0) {
+							// ACCEPTABLE. Create state.
+							hashtables[i][currentAmount] = true;
+							continue;
+						} else if (i > 0 && remainingAmount > 0 && remainingAmount in hashtables[i - 1]) {
+							// ACCEPTABLE. Create state.
+							hashtables[i][currentAmount] = true;
+							continue;
+						}
+					}
+
+					// Check if a solution exists when we don't include it.
+					if (i > 0 && currentAmount in hashtables[i-1]) {
+						// ACCEPTABLE. Create state.
+						hashtables[i][currentAmount] = false;
+					}
+				}
+			}
+
+			console.debug(`iterations for amount ${toAmount}: ${iterations}`);
+			// No solution
+			if (!(toAmount in hashtables[n-1])) {
+				return [];
+			}
+
+			// Extract Subset Proofs
+			const subSetProofs: Array<Proof> = [];
+			let i = n-1;
+			while (i >= 0 && toAmount > 0) {
+				if (hashtables[i][toAmount] === true) {
+					subSetProofs.push(sortedProofs[i]);
+					toAmount -= sortedProofs[i].amount;
+				}
+				i--;
+			}
+			return subSetProofs;
+		}
+
+		// Create Table Up to `amountToSend`
+		let currentAmount = amountToSend;
+		let selectedProofs: Array<Proof> = computeTable(1, currentAmount);
+
+		// No solution for given amount, let's try a bigger one
+		while (selectedProofs.length === 0) {
+			currentAmount += 1;
+			selectedProofs = computeTable(currentAmount, currentAmount);
+		}
+
+		// Fees
+		if (includeFees) {
+			let currentFees = currentAmount - amountToSend;
+			let expectedFees = this.getFeesForProofs(selectedProofs);
+			console.debug(`expected fees: ${expectedFees}\ncurrent fees: ${currentFees}`);
+			let i = 0;
+			while (currentFees < expectedFees) {
+				++i;
+				console.debug(`include fees iteration: ${i}`);
+				currentAmount += 1;
+				// Check that the current target amount does not exceed the provided balance
+				if (currentAmount > sumSeries[n-1]) {
+					throw new Error("Not enough balance to cover this amount");
+				}
+				selectedProofs = computeTable(currentAmount, currentAmount);
+				console.debug(`selectedProofs: ${JSON.stringify(selectedProofs)}`)
+				// Check that there exist a solution for `currentAmount`
+				if (selectedProofs.length === 0) {
+					continue;
+				}
+				currentFees = currentAmount - amountToSend;
+				expectedFees = this.getFeesForProofs(selectedProofs);
+				console.debug(`expected fees: ${expectedFees}\ncurrent fees: ${currentFees}`);
+			}
+		}
+
+		return {
+			keep: sortedProofs.filter((p: Proof) => !selectedProofs.includes(p)),
+			send: selectedProofs
+		};
+	}
+
 	/**
 	 * calculates the fees based on inputs (proofs)
 	 * @param proofs input proofs to calculate fees for

@@ -1639,9 +1639,14 @@ describe('Lollerfirst: Test coinselection with subset-sum', () => {
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
 		const amountToSend = Math.floor((Math.random() * totalAmount) / 2 + totalAmount / 2);
 
+		// Reuseable vars
+		let send;
+		let keep;
+		let fee;
+
 		// Non-exact match test
 		console.time('selectProofs-fees-closest');
-		const { send } = wallet.selectProofsToSend(
+		let { send } = wallet.selectProofsToSend(
 			proofs,
 			amountToSend,
 			true, // includeFees
