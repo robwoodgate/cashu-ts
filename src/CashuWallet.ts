@@ -391,7 +391,7 @@ class CashuWallet {
 	 * seeks to minimize fees and proof selections if required. For proofs arrays
 	 * over MAX_PROOFS in length, strict RGLI will apply for efficiency.
 	 * @see https://crypto.ethz.ch/publications/files/Przyda02.pdf
-	 * @remarks RGLI has time complexity O(nlog n) and space complexity O(n).
+	 * @remarks RGLI has time complexity O(n log n) and space complexity O(n).
 	 * @param proofs Array of Proof objects available to select from
 	 * @param amountToSend The target amount to send
 	 * @param includeFees Optional boolean to include fees; Default: false
