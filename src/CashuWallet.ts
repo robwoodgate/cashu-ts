@@ -507,15 +507,17 @@ class CashuWallet {
 						S = [...S.filter((proof) => proof !== p), q];
 					}
 				} else {
-					// Valid replacements get us over amountToSend at least cost
+					// Valid replacements get (or keep) us over amountToSend at
+					// while minimizing the "cost" (excess over target, fees, #proofs)
 					const costS = cost(S);
 					validReplacements = others.filter((q) => {
 						const newS = [...S.filter((proof) => proof !== p), q];
 						const newSum = sumExFees(newS);
 						return cost(newS) < costS && newSum >= amountToSend;
 					});
+					// Swap out current proof (p) for the replacement proof (q)
+					// that reduces our costs the most
 					if (validReplacements.length > 0) {
-						// Select q minimizing cost(newS)
 						const q = validReplacements.reduce((best, current) => {
 							const bestNewS = [...S.filter((proof) => proof !== p), best];
 							const currentNewS = [...S.filter((proof) => proof !== p), current];

@@ -1590,8 +1590,9 @@ describe('Test coinselection', () => {
 				});
 			})
 		);
+		let numProofs = 100;
 		let proofs: Array<Proof> = [];
-		for (let i = 0; i < 100; ++i) {
+		for (let i = 0; i < numProofs; ++i) {
 			const bytes = randomBytes(1);
 			const amount = 1 << bytes[0] % 19;
 			const proof = {
@@ -1606,7 +1607,7 @@ describe('Test coinselection', () => {
 		const totalAmount = proofs.reduce((acc, p) => p.amount + acc, 0);
 
 		console.log(`totalAmount: ${totalAmount}`);
-		console.log(`N Proofs: 100`);
+		console.log(`N Proofs: ${numProofs}`);
 
 		const keysets = await mint.getKeySets();
 		const wallet = new CashuWallet(mint, { unit, keysets: keysets.keysets });
