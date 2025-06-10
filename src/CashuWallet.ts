@@ -455,7 +455,6 @@ class CashuWallet {
 		 */
 		console.time('selectProofs-rgli-' + (exactMatch ? 'exactMatch' : 'closeMatch'));
 		for (let trial = 0; trial < MAX_TRIALS; trial++) {
-
 			// PHASE 1: Randomized Greedy Selection
 			// Add proofs up to amountToSend (after adjusting for fees)
 			// for exact match or the first amount over target otherwise
@@ -472,7 +471,6 @@ class CashuWallet {
 				if (newSum >= amountToSend) break;
 			}
 			// console.timeEnd('selectProofs-phase1-trial-' + trial);
-
 			// PHASE 2: Local Improvement
 			// Examine all the amounts found in the first phase, and find the
 			// largest amount not in the current solution, which would get us
