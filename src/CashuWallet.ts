@@ -551,7 +551,7 @@ class CashuWallet {
 				bestSubset &&
 				bestCost < Infinity
 			) {
-				console.log(`Trial#${trial}: Using the solution found:`, sumExFees(S));
+				console.log(`Trial #${trial}: Using the solution found:`, sumExFees(S));
 				break;
 			}
 		}
