@@ -686,13 +686,12 @@ class CashuWallet {
 			let left = 0;
 			let right = sortedOthers.length - 1;
 			let bestIndex: number | null = null;
-
-			if (exactMatch) {
-				while (left <= right) {
-					const middle = Math.floor((left + right) / 2);
-					const q = sortedOthers[middle];
-					const qExFee = amountExFee(q);
-					const newSumExFees = currentSumExFees - pExFee + qExFee;
+			while (left <= right) {
+				const middle = Math.floor((left + right) / 2);
+				const q = sortedOthers[middle];
+				const qExFee = amountExFee(q);
+				const newSumExFees = currentSumExFees - pExFee + qExFee;
+				if (exactMatch) {
 					if (newSumExFees <= amountToSend) {
 						if (newSumExFees > currentSumExFees) {
 							bestIndex = middle;
@@ -701,16 +700,10 @@ class CashuWallet {
 					} else {
 						right = middle - 1;
 					}
-				}
-			} else {
-				while (left <= right) {
-					const middle = Math.floor((left + right) / 2);
-					const q = sortedOthers[middle];
-					const qExFee = amountExFee(q);
-					const newSumExFees = currentSumExFees - pExFee + qExFee;
+				} else {
 					if (newSumExFees >= amountToSend) {
 						bestIndex = middle;
-						right = middle - 1; // Look for smaller q to minimize excess
+						right = middle - 1;
 					} else {
 						left = middle + 1;
 					}
