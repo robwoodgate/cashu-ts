@@ -387,6 +387,7 @@ describe('send', () => {
 			})
 		);
 		const wallet = new CashuWallet(mint, { unit });
+		await wallet.getKeys();
 
 		const result = await wallet.send(1, proofs);
 
@@ -1515,6 +1516,7 @@ describe('Test coinselection', () => {
 	});
 	test('optimal offline coinselection', async () => {
 		const wallet = new CashuWallet(mint, { unit });
+		await wallet.getKeys();
 		const targetAmount = 25;
 		const { send } = await wallet.send(targetAmount, notes, {
 			offline: true
@@ -1525,6 +1527,7 @@ describe('Test coinselection', () => {
 	});
 	test('next optimal offline coinselection', async () => {
 		const wallet = new CashuWallet(mint, { unit });
+		await wallet.getKeys();
 		const targetAmount = 23;
 		// Offline means exact match only, and we throw if we can't make it
 		await expect(
@@ -1676,36 +1679,38 @@ describe('Test coinselection', () => {
 
 		// Lollerfirst's DP version - selectProofsToSendV2:
 
-		// // Non-exact match test
-		// console.time('selectProofsv2-fees-closest');
-		// ({ send } = wallet.selectProofsToSendV2(
-		// 			proofs,
-		// 			amountToSend,
-		// 			true, // includeFees
-		// 		));
-		// console.timeEnd('selectProofsv2-fees-closest');
-		// fee = wallet.getFeesForProofs(send);
-		// amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-		// expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
-		// // Exact match test
-		// console.time('selectProofsv2-fees-exact');
-		// ({ send, keep } = wallet.selectProofsToSendV2(
-		// 			proofs,
-		// 			amountToSend,
-		// 			true, // includeFees
-		// 		));
-		// console.timeEnd('selectProofsv2-fees-exact');
-		// amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
-		// fee = wallet.getFeesForProofs(send);
-		// amountSend = send.reduce((acc, p) => acc + p.amount, 0);
-		// if (send.length > 0) {
-		// 	// Exact match found
-		// 	expect(amountSend - fee).toEqual(amountToSend);
-		// } else {
-		// 	// No exact match possible, all proofs kept
-		// 	expect(amountKeep).toEqual(totalAmount);
-		// 	expect(send).toHaveLength(0);
-		// }
+		// Non-exact match test
+		console.time('selectProofsv2-fees-closest');
+		({ send } = wallet.selectProofsToSendV2(
+			proofs,
+			amountToSend,
+			true, // includeFees
+			false // exact match
+		));
+		console.timeEnd('selectProofsv2-fees-closest');
+		fee = wallet.getFeesForProofs(send);
+		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		expect(amountSend - fee).toBeGreaterThanOrEqual(amountToSend);
+		// Exact match test
+		console.time('selectProofsv2-fees-exact');
+		({ send, keep } = wallet.selectProofsToSendV2(
+			proofs,
+			amountToSend,
+			true, // includeFees
+			true // exact match
+		));
+		console.timeEnd('selectProofsv2-fees-exact');
+		amountKeep = keep.reduce((acc, p) => acc + p.amount, 0);
+		fee = wallet.getFeesForProofs(send);
+		amountSend = send.reduce((acc, p) => acc + p.amount, 0);
+		if (send.length > 0) {
+			// Exact match found
+			expect(amountSend - fee).toEqual(amountToSend);
+		} else {
+			// No exact match possible, all proofs kept
+			expect(amountKeep).toEqual(totalAmount);
+			expect(send).toHaveLength(0);
+		}
 	});
 });
 
