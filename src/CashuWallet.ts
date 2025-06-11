@@ -417,9 +417,7 @@ class CashuWallet {
 			? proofs.filter((p) => p.amount > this.getProofFeePPK(p) / 1000)
 			: proofs;
 
-		/**
-		 * Precompute feePPK for each proof to avoid repeated calls
-		 */
+		// Precompute feePPK for each proof to avoid repeated calls
 		const proofToFeePPK = new Map<Proof, number>();
 		for (const p of eligibleProofs) {
 			proofToFeePPK.set(p, this.getProofFeePPK(p));
@@ -428,21 +426,19 @@ class CashuWallet {
 		/**
 		 * Helper functions
 		 */
-		const calculateSumExFees = (totalAmount: number, totalFeePPK: number): number => {
-			const fees = includeFees ? Math.ceil(totalFeePPK / 1000) : 0;
-			return totalAmount - fees;
+		const amountExFee = (p: Proof): number => {
+			return includeFees ? p.amount - (proofToFeePPK.get(p) ?? 0) / 1000 : p.amount;
 		};
-		const calculateCost = (
-			totalAmount: number,
-			totalFeePPK: number,
-			subsetLength: number
-		): number => {
-			const sumExFees = calculateSumExFees(totalAmount, totalFeePPK);
-			if (sumExFees < amountToSend) return Infinity; // Reject if below target
-			const excess = sumExFees - amountToSend;
-			const feeCost = includeFees ? Math.ceil(totalFeePPK / 1000) : 0;
-			// "Cost" is the excess over target, plus a penalty for subset length and fees
-			return excess + feeCost * subsetLength;
+		const sumExFees = (amount: number, feePPK: number): number => {
+			return amount - (includeFees ? Math.ceil(feePPK / 1000) : 0);
+		};
+		// "Cost" is the excess over target, plus a penalty for subset length and fees
+		const calculateCost = (amount: number, feePPK: number, length: number): number => {
+			const netSum = sumExFees(amount, feePPK);
+			if (netSum < amountToSend) return Infinity;
+			const excess = netSum - amountToSend;
+			const feeCost = includeFees ? Math.ceil(feePPK / 1000) : 0;
+			return excess + feeCost * length;
 		};
 		const shuffleArray = <T>(array: T[]): T[] => {
 			const shuffled = [...array];
@@ -452,132 +448,130 @@ class CashuWallet {
 			}
 			return shuffled;
 		};
+		// Binary search: finds a proof index based on value and direction
+		const binarySearchIndex = (
+			arr: Array<Proof>,
+			value: number,
+			findLargest: boolean
+		): number | null => {
+			let left = 0,
+				right = arr.length - 1,
+				result: number | null = null;
+			while (left <= right) {
+				const mid = Math.floor((left + right) / 2);
+				const midValue = amountExFee(arr[mid]);
+				if (findLargest ? midValue <= value : midValue >= value) {
+					result = mid;
+					if (findLargest) left = mid + 1;
+					else right = mid - 1;
+				} else {
+					if (findLargest) right = mid - 1;
+					else left = mid + 1;
+				}
+			}
+			return findLargest ? result : left < arr.length ? left : null;
+		};
+		// Replaces a proof using binary logic
+		const insertSorted = (arr: Array<Proof>, p: Proof): void => {
+			const value = amountExFee(p);
+			let left = 0,
+				right = arr.length;
+			while (left < right) {
+				const mid = Math.floor((left + right) / 2);
+				if (amountExFee(arr[mid]) < value) left = mid + 1;
+				else right = mid;
+			}
+			arr.splice(left, 0, p);
+		};
 
-		// Handle invalid / impossible amount
-		const totalEligibleAmount = eligibleProofs.reduce((acc, p) => acc + p.amount, 0);
-		const totalEligibleFeePPK = eligibleProofs.reduce((acc, p) => acc + proofToFeePPK.get(p)!, 0);
-		if (
-			amountToSend <= 0 ||
-			amountToSend > calculateSumExFees(totalEligibleAmount, totalEligibleFeePPK)
-		) {
+		// Handle invalid / impossible amountToSend
+		const totalAmount = eligibleProofs.reduce((acc, p) => acc + p.amount, 0);
+		const totalFeePPK = eligibleProofs.reduce((acc, p) => acc + (proofToFeePPK.get(p) ?? 0), 0);
+		if (amountToSend <= 0 || amountToSend > sumExFees(totalAmount, totalFeePPK)) {
 			return { keep: proofs, send: [] };
 		}
+
+		// Precompute max acceptable amount for non-exact matches
+		const maxOverAmount = Math.min(
+			amountToSend * (1 + MAX_OVRPCT),
+			sumExFees(totalAmount, totalFeePPK)
+		);
 
 		/**
 		 * RGLI algorithm: Runs multiple trials (up to MAX_TRIALS)
 		 * Each trial starts with randomized greedy subset (S) and
 		 * then tries to improve that subset to get a valid solution.
 		 * NOTE: Fees are dynamic, based on number of proofs (PPK),
-		 * so we perform all calculations based on net amounts (sumExFees)
+		 * so we perform all calculations based on net amounts
 		 */
-		console.time('selectProofs-rgli-' + (exactMatch ? 'exactMatch' : 'closeMatch'));
 		for (let trial = 0; trial < MAX_TRIALS; trial++) {
 			// PHASE 1: Randomized Greedy Selection
 			// Add proofs up to amountToSend (after adjusting for fees)
 			// for exact match or the first amount over target otherwise
 			// console.time('selectProofs-phase1-trial-' + trial);
 			let S: Array<Proof> = [];
-			let totalAmount = 0;
-			let totalFeePPK = 0;
-			let shuffledProofs = shuffleArray(eligibleProofs);
-			for (const p of shuffledProofs) {
-				const pFeePPK = proofToFeePPK.get(p)!;
-				const newTotalAmount = totalAmount + p.amount;
-				const newTotalFeePPK = totalFeePPK + pFeePPK;
-				const newSum = calculateSumExFees(newTotalAmount, newTotalFeePPK);
-				if (exactMatch && newSum > amountToSend) {
-					break;
-				}
+			let amount = 0;
+			let feePPK = 0;
+			for (const p of shuffleArray(eligibleProofs)) {
+				const pFeePPK = proofToFeePPK.get(p) ?? 0;
+				const newAmount = amount + p.amount;
+				const newFeePPK = feePPK + pFeePPK;
+				const netSum = sumExFees(newAmount, newFeePPK);
+				if (exactMatch && netSum > amountToSend) break;
 				S.push(p);
-				totalAmount = newTotalAmount;
-				totalFeePPK = newTotalFeePPK;
-				if (newSum >= amountToSend) break;
+				amount = newAmount;
+				feePPK = newFeePPK;
+				if (netSum >= amountToSend) break;
 			}
 			// console.timeEnd('selectProofs-phase1-trial-' + trial);
 
 			// PHASE 2: Local Improvement
 			// Examine all the amounts found in the first phase, and find the
-			// largest amount not in the current solution, which would get us
+			// largest amount not in the current solution (others), which would get us
 			// closer to the amountToSend (exact match) or lowest cost otherwise
 			// console.time('selectProofs-phase2-trial-' + trial);
-			const shuffled_S = shuffleArray(S);
-			for (const p of shuffled_S) {
-				// Exact solution found?
-				const currentSumExFees = calculateSumExFees(totalAmount, totalFeePPK);
-				if (currentSumExFees === amountToSend) {
-					break;
-				}
-				// Close enough solution found?
-				const maxAmount = parseInt(amountToSend * (1 + MAX_OVRPCT / 100));
-				const totalAmountAll = calculateSumExFees(totalEligibleAmount, totalEligibleFeePPK);
-				if (!exactMatch && currentSumExFees <= Math.min(maxAmount, totalAmountAll)) {
-					break;
-				}
 
-				// Init vars
-				const pFeePPK = proofToFeePPK.get(p)!;
-				const tempTotalAmount = totalAmount - p.amount;
-				const tempTotalFeePPK = totalFeePPK - pFeePPK;
-				const others = eligibleProofs.filter((q) => !S.includes(q));
-				let bestQ: Proof | null = null;
-				let bestNewSumExFees = currentSumExFees;
-				let bestNewCost = calculateCost(totalAmount, totalFeePPK, S.length);
+			// Calculate the "others" array and sort it ASC
+			let others = eligibleProofs.filter((q) => !S.includes(q));
+			others.sort((a, b) => amountExFee(a) - amountExFee(b));
 
-				if (exactMatch) {
-					// Valid replacements can move us closer to amountToSend
-					// but without going over (net of fees)
-					for (const q of others) {
-						const qFeePPK = proofToFeePPK.get(q)!;
-						const newTotalAmount = tempTotalAmount + q.amount;
-						const newTotalFeePPK = tempTotalFeePPK + qFeePPK;
-						const newSum = calculateSumExFees(newTotalAmount, newTotalFeePPK);
-						if (newSum > currentSumExFees && newSum <= amountToSend) {
-							if (newSum > bestNewSumExFees) {
-								bestNewSumExFees = newSum;
-								bestQ = q;
-							}
-						}
-					}
-					// Swap out current proof (p) for the best replacement proof (q)
-					if (bestQ) {
-						S = S.filter((proof) => proof !== p).concat(bestQ);
-						totalAmount = tempTotalAmount + bestQ.amount;
-						totalFeePPK = tempTotalFeePPK + proofToFeePPK.get(bestQ)!;
-					}
-				} else {
-					// Valid replacements get (or keep) us over amountToSend
-					// while minimizing the "cost" (excess over target, fees, #proofs)
-					for (const q of others) {
-						const qFeePPK = proofToFeePPK.get(q)!;
-						const newTotalAmount = tempTotalAmount + q.amount;
-						const newTotalFeePPK = tempTotalFeePPK + qFeePPK;
-						const newSum = calculateSumExFees(newTotalAmount, newTotalFeePPK);
-						const newCost = calculateCost(newTotalAmount, newTotalFeePPK, S.length);
-						if (newCost < bestNewCost && newSum >= amountToSend) {
-							bestNewCost = newCost;
-							bestQ = q;
-						}
-					}
-					// Swap out current proof (p) for the best replacement proof (q)
-					if (bestQ) {
-						S = S.filter((proof) => proof !== p).concat(bestQ);
-						totalAmount = tempTotalAmount + bestQ.amount;
-						totalFeePPK = tempTotalFeePPK + proofToFeePPK.get(bestQ)!;
-					}
+			// Generate a random order for accessing the trial subset ('S')
+			const indices = shuffleArray(Array.from({ length: S.length }, (_, i) => i));
+			for (const i of indices) {
+				// Exact or "close enough" solution found?
+				const netSum = sumExFees(amount, feePPK);
+				if (netSum === amountToSend || (!exactMatch && netSum <= maxOverAmount)) break;
+
+				// Get details for proof being replaced, and remaining amount
+				const p = S[i];
+				const pFeePPK = proofToFeePPK.get(p) ?? 0;
+				const tempAmount = amount - p.amount;
+				const tempFeePPK = feePPK - pFeePPK;
+
+				// Find a better replacement proof
+				const bound = amountToSend - netSum + amountExFee(p);
+				const qIndex = binarySearchIndex(others, bound, exactMatch);
+				if (qIndex !== null && (!exactMatch || amountExFee(others[qIndex]) > amountExFee(p))) {
+					const q = others[qIndex];
+					S[i] = q;
+					amount = tempAmount + q.amount;
+					feePPK = tempFeePPK + (proofToFeePPK.get(q) ?? 0);
+					others.splice(qIndex, 1);
+					insertSorted(others, p);
 				}
 			}
 			// console.timeEnd('selectProofs-phase2-trial-' + trial);
 
-			// Update best cost solution
-			const currentCost = calculateCost(totalAmount, totalFeePPK, S.length);
-			if (currentCost < bestCost) {
+			// Update best solution
+			const cost = calculateCost(amount, feePPK, S.length);
+			if (cost < bestCost) {
 				bestSubset = [...S];
-				bestCost = currentCost;
+				bestCost = cost;
 			}
 
 			// If not minimizing costs (!includeFees) or proof set is large (>MAX_PROOFS)
 			// then accept the best solution already found (ie pure RGLI)
-			// Otherwise we continue to iterate a while longer to minimize costs
+			// Otherwise we continue to iterate a while longer to minimize cost or error
 			if (
 				(!includeFees || eligibleProofs.length > MAX_PROOFS) &&
 				bestSubset &&
@@ -585,7 +579,7 @@ class CashuWallet {
 			) {
 				console.log(
 					`Trial #${trial}: Using the solution found:`,
-					calculateSumExFees(totalAmount, totalFeePPK)
+					S.reduce((acc, p) => acc + p.amount, 0)
 				);
 				break;
 			}
@@ -595,11 +589,11 @@ class CashuWallet {
 		// Return result
 		if (bestSubset && bestCost < Infinity) {
 			console.log('amountToSend', amountToSend);
-			const bestTotalAmount = bestSubset.reduce((acc, p) => acc + p.amount, 0);
-			const bestTotalFeePPK = bestSubset.reduce((acc, p) => acc + proofToFeePPK.get(p)!, 0);
+			const bestAmount = bestSubset.reduce((acc, p) => acc + p.amount, 0);
+			const bestFeePPK = bestSubset.reduce((acc, p) => acc + (proofToFeePPK.get(p) ?? 0), 0);
 			console.log(
 				'RESULT:>>',
-				calculateSumExFees(bestTotalAmount, bestTotalFeePPK),
+				sumExFees(bestAmount, bestFeePPK),
 				`(+fees = ${sumProofs(bestSubset)})`
 			);
 			return {

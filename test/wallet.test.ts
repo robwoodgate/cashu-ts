@@ -1612,7 +1612,7 @@ describe('Test coinselection', () => {
 				});
 			})
 		);
-		let numProofs = 100;
+		let numProofs = 1000;
 		let proofs: Array<Proof> = [];
 		for (let i = 0; i < numProofs; ++i) {
 			const bytes = randomBytes(1);
