@@ -1114,6 +1114,16 @@ describe('Test coinselection', () => {
 				includeFees: true
 			})
 		).rejects.toThrow('Not enough funds available to send');
+		// try using selectProofsToSend directly
+		const { send, keep } = wallet.selectProofsToSend(
+			smallNotes,
+			targetAmount,
+			true, // includeFees
+			true //  exact match
+		);
+		// Fee = ceil(1 * 1000 / 1000) = 1, need 60 + 1 = 61, 64 >= 61
+		expect(send).toHaveLength(0);
+		expect(keep).toHaveLength(3);
 	});
 	test('single proof selection', async () => {
 		server.use(
@@ -1201,6 +1211,15 @@ describe('Test coinselection', () => {
 		const { send } = await wallet.send(targetAmount, notes, { offline: true, includeFees: true });
 		// No proofs needed, fee = 0, net = 0 >= 0
 		expect(send).toHaveLength(0);
+		// try using selectProofsToSend directly
+		const { send: send1, keep: keep1 } = wallet.selectProofsToSend(
+			notes,
+			targetAmount,
+			true, // includeFees
+			true //  exact match
+		);
+		expect(send1).toHaveLength(0);
+		expect(keep1).toHaveLength(6);
 	});
 	test('all proofs smaller than target', async () => {
 		server.use(
@@ -1590,7 +1609,7 @@ describe('Test coinselection', () => {
 				});
 			})
 		);
-		let numProofs = 100;
+		let numProofs = 1000;
 		let proofs: Array<Proof> = [];
 		for (let i = 0; i < numProofs; ++i) {
 			const bytes = randomBytes(1);

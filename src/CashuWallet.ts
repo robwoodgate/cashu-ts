@@ -407,13 +407,9 @@ class CashuWallet {
 		// Init vars
 		const MAX_TRIALS = 50; // 40-80 is optimal (per RGLI paper)
 		const MAX_PROOFS = 100; // Strict RGLI will apply over this amount
+		const MAX_OVRPCT = 0.5; // Acceptable close match overage (percent)
 		let bestSubset: Array<Proof> | null = null;
 		let bestCost = Infinity;
-
-		// Handle invalid amount
-		if (amountToSend <= 0) {
-			return { keep: proofs, send: [] };
-		}
 
 		// Remove any proofs that are uneconomical to spend if fees are included.
 		// Otherwise we can leave them in, as fees will be the receiver's problem.
@@ -445,6 +441,11 @@ class CashuWallet {
 			}
 			return shuffled;
 		};
+
+		// Handle invalid / impossible amount
+		if (amountToSend <= 0 || amountToSend > sumExFees(eligibleProofs)) {
+			return { keep: proofs, send: [] };
+		}
 
 		/**
 		 * RGLI algorithm: Runs multiple trials (up to MAX_TRIALS)
@@ -478,8 +479,14 @@ class CashuWallet {
 			// console.time('selectProofs-phase2-trial-' + trial);
 			const shuffled_S = shuffleArray(S);
 			for (const p of shuffled_S) {
-				// Exact solution found
+				// Exact solution found?
 				if (sumExFees(S) === amountToSend) {
+					break;
+				}
+				// Close enough solution found?
+				const maxAmount = parseInt(amountToSend * (1 + MAX_OVRPCT / 100));
+				const totalAmount = sumExFees(eligibleProofs);
+				if (!exactMatch && sumExFees(S) <= Math.min(maxAmount, totalAmount)) {
 					break;
 				}
 
@@ -529,7 +536,7 @@ class CashuWallet {
 			}
 			// console.timeEnd('selectProofs-phase2-trial-' + trial);
 
-			// Update best solution
+			// Update best cost solution
 			const currentCost = cost(S);
 			if (currentCost < bestCost) {
 				bestSubset = [...S];
@@ -544,10 +551,7 @@ class CashuWallet {
 				bestSubset &&
 				bestCost < Infinity
 			) {
-				console.log(
-					'Using the solution found:',
-					S.reduce((acc, p) => acc + p.amount, 0)
-				);
+				console.log(`Trial#${trial}: Using the solution found:`, sumExFees(S));
 				break;
 			}
 		}
