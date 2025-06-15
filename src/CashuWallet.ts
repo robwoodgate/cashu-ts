@@ -583,17 +583,17 @@ class CashuWallet {
 			// Update best solution?
 			const delta = calculateDelta(amount, feePPK);
 			if (delta < bestDelta) {
-				bestSubset = [...S];
+				bestSubset = [...S].sort((a, b) => amountExFee(b) - amountExFee(a)); // copy Desc
 				bestDelta = delta;
 
 				// Check we haven't overpaid fees
-				const tempS = [...S].sort((a, b) => amountExFee(b) - amountExFee(a)); // Desc
+				const tempS = [...bestSubset]; // copy
 				const p = tempS.pop(); // lowest contribution
 				const pFeePPK = proofToFeePPK.get(p) ?? 0;
 				const tempAmount = amount - p.amount;
 				const tempFeePPK = feePPK - pFeePPK;
 				const tempDelta  = calculateDelta(tempAmount, tempFeePPK);
-				console.log('BEST S:', delta, S.map((p)=>p.amount));
+				console.log('bestSubset:', delta, bestSubset.map((p)=>p.amount));
 				if (tempDelta < delta) {
 					console.log('BEST = TEMP S:', tempDelta, tempS.map((p)=>p.amount));
 					bestSubset = [...tempS];
