@@ -407,7 +407,6 @@ class CashuWallet {
 	): SendResponse {
 		// Init vars
 		const MAX_TRIALS = 60; // 40-80 is optimal (per RGLI paper)
-		const MAX_PROOFS = 100; // Strict RGLI will apply over this amount
 		const MAX_OVRPCT = 1; // Acceptable close match overage (percent)
 		const MAX_OVRAMT = 1024; // Acceptable close match overage (absolute)
 		let bestSubset: Array<Proof> | null = null;
@@ -567,7 +566,7 @@ class CashuWallet {
 					const qAmount = amountExFee(q);
 					const pAmount = amountExFee(p);
 					// Is Close Match or a larger amount (EM/CM)
-					if ((!exactMatch || qAmount > pAmount)) {
+					if (!exactMatch || qAmount > pAmount) {
 						// Larger closes target (EM/CM) or a smaller amount (CM)
 						if (target >= 0 || qAmount <= pAmount) {
 							S[i] = q;
@@ -583,7 +582,7 @@ class CashuWallet {
 			// Update best solution?
 			const delta = calculateDelta(amount, feePPK);
 			if (delta < bestDelta) {
-				bestSubset = [...S].sort((a, b) => amountExFee(b) - amountExFee(a)); // copy Desc
+				bestSubset = [...S].sort((a, b) => amountExFee(b) - amountExFee(a)); // copy and sort Desc
 				bestDelta = delta;
 
 				// Check we haven't overpaid fees
@@ -592,30 +591,24 @@ class CashuWallet {
 				const pFeePPK = proofToFeePPK.get(p) ?? 0;
 				const tempAmount = amount - p.amount;
 				const tempFeePPK = feePPK - pFeePPK;
-				const tempDelta  = calculateDelta(tempAmount, tempFeePPK);
 				console.log('bestSubset:', delta, bestSubset.map((p)=>p.amount));
+				const tempDelta = calculateDelta(tempAmount, tempFeePPK);
 				if (tempDelta < delta) {
 					console.log('BEST = TEMP S:', tempDelta, tempS.map((p)=>p.amount));
-					bestSubset = [...tempS];
+					bestSubset = [...tempS]; // copy
 					bestDelta = tempDelta;
 				}
-
-
 			}
 
-			// If not minimizing costs (!includeFees) or proof set is large (>MAX_PROOFS)
-			// then accept the best solution already found (ie pure RGLI)
-			// Otherwise we continue to iterate a while longer to minimize costs
+			// Exact or acceptable close match solution found? If so, we are done
 			if (bestSubset && bestDelta < Infinity) {
 				const bestAmount = bestSubset.reduce((acc, p) => acc + p.amount, 0);
 				const bestFeePPK = bestSubset.reduce((acc, p) => acc + (proofToFeePPK.get(p) ?? 0), 0);
 				const bestSum = sumExFees(bestAmount, bestFeePPK);
 				if (
-					// (!includeFees || eligibleProofs.length > MAX_PROOFS) &&
-					(bestSum === amountToSend ||
-						(!exactMatch && bestSum >= amountToSend && bestSum <= maxOverAmount))
+					bestSum === amountToSend ||
+					(!exactMatch && bestSum >= amountToSend && bestSum <= maxOverAmount)
 				) {
-					console.log('BEST SOLUTION:', bestSubset.map((p)=>p.amount));
 					break;
 				}
 			}
