@@ -544,6 +544,7 @@ class CashuWallet {
 					netSum === amountToSend ||
 					(!exactMatch && netSum >= amountToSend && netSum <= maxOverAmount)
 				) {
+					console.log('FOUND SOLUTION:', S.map((p)=>p.amount));
 					break;
 				}
 
@@ -565,10 +566,10 @@ class CashuWallet {
 					const q = others[qIndex];
 					const qAmount = amountExFee(q);
 					const pAmount = amountExFee(p);
-					if (!exactMatch || qAmount > pAmount) {
-						// CM || larger (CM/EM)
+					// Is Close Match or a larger amount (EM/CM)
+					if ((!exactMatch || qAmount > pAmount)) {
+						// Larger closes target (EM/CM) or a smaller amount (CM)
 						if (target >= 0 || qAmount <= pAmount) {
-							// closes target (EM/CM) || smaller (CM)
 							S[i] = q;
 							amount = tempAmount + q.amount;
 							feePPK = tempFeePPK + (proofToFeePPK.get(q) ?? 0);
@@ -584,6 +585,22 @@ class CashuWallet {
 			if (delta < bestDelta) {
 				bestSubset = [...S];
 				bestDelta = delta;
+
+				// Check we haven't overpaid fees
+				const tempS = [...S].sort((a, b) => amountExFee(b) - amountExFee(a)); // Desc
+				const p = tempS.pop(); // lowest contribution
+				const pFeePPK = proofToFeePPK.get(p) ?? 0;
+				const tempAmount = amount - p.amount;
+				const tempFeePPK = feePPK - pFeePPK;
+				const tempDelta  = calculateDelta(tempAmount, tempFeePPK);
+				console.log('BEST S:', delta, S.map((p)=>p.amount));
+				if (tempDelta < delta) {
+					console.log('BEST = TEMP S:', tempDelta, tempS.map((p)=>p.amount));
+					bestSubset = [...tempS];
+					bestDelta = tempDelta;
+				}
+
+
 			}
 
 			// If not minimizing costs (!includeFees) or proof set is large (>MAX_PROOFS)
@@ -594,10 +611,11 @@ class CashuWallet {
 				const bestFeePPK = bestSubset.reduce((acc, p) => acc + (proofToFeePPK.get(p) ?? 0), 0);
 				const bestSum = sumExFees(bestAmount, bestFeePPK);
 				if (
-					(!includeFees || eligibleProofs.length > MAX_PROOFS) &&
+					// (!includeFees || eligibleProofs.length > MAX_PROOFS) &&
 					(bestSum === amountToSend ||
 						(!exactMatch && bestSum >= amountToSend && bestSum <= maxOverAmount))
 				) {
+					console.log('BEST SOLUTION:', bestSubset.map((p)=>p.amount));
 					break;
 				}
 			}
