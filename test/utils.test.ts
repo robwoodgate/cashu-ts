@@ -494,3 +494,16 @@ describe('test raw tokens', () => {
 		expect(decodedToken).toEqual(token);
 	});
 });
+
+describe('test non-cryptographic hashing functions and PRNG', () => {
+	test('cyrb53 produces consistent hashes', () => {
+		expect(utils.cyrb53('a')).toBe(7929297801672961);
+		expect(utils.cyrb53('b')).toBe(8684336938537663);
+		expect(utils.cyrb53('revenge')).toBe(4051478007546757);
+		expect(utils.cyrb53('revenue')).toBe(8309097637345594);
+		
+		expect(utils.cyrb53('revenue', 1)).toBe(8697026808958300);
+		expect(utils.cyrb53('revenue', 2)).toBe(2021074995066978);
+		expect(utils.cyrb53('revenue', 3)).toBe(4747903550515895);
+	});
+});

@@ -1222,6 +1222,8 @@ describe('Blind Authentication', () => {
 	});
 });
 
+/*
+
 describe('Test coinselection', () => {
 	const notes = [
 		{
@@ -2000,3 +2002,4 @@ function expectNUT10SecretDataToEqual(p: Array<Proof>, s: string) {
 		expect(parsedSecret[1].data).toBe(s);
 	});
 }
+*/

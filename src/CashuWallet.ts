@@ -37,6 +37,7 @@ import type {
 import { MintQuoteState, MeltQuoteState } from './model/types/index.js';
 import { SubscriptionCanceller } from './model/types/wallet/websocket.js';
 import {
+	cyrb53,
 	getDecodedToken,
 	getKeepAmounts,
 	hasValidDleq,
@@ -408,12 +409,18 @@ class CashuWallet {
 		const sumExFees = (amount: number, feePPK: number): number => {
 			return amount - (includeFees ? Math.ceil(feePPK / 1000) : 0);
 		};
+
 		// Shuffle array for randomization
 		const shuffleArray = <T>(array: T[]): T[] => {
 			const shuffled = [...array];
+			// Create a deterministic seed from the array elements
+			const seedString = shuffled.map((item) => JSON.stringify(item)).join('');
+
 			for (let i = shuffled.length - 1; i > 0; i--) {
-				const j = Math.floor(Math.random() * (i + 1));
-				[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+				const j = cyrb53(seedString, i) % shuffled.length;
+				if (j !== i) {
+					[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+				}
 			}
 			return shuffled;
 		};
