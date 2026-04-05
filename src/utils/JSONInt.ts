@@ -16,9 +16,53 @@
  *   - Custom `toJSON`/replacer behavior can change output.
  *
  * There is no consistent way to preserve BigInt type through JSON today, so handling that case is
- * up to users. In Cashu-TS, we use the Amount VO to normalize numbers.
+ * up to users. In Cashu-TS, we use the `Amount` VO to normalize numbers.
  */
-export interface ParseOptions {
+export const JSONInt: JSONIntApi = Object.freeze({
+	parse,
+	stringify,
+});
+
+export default JSONInt;
+
+export interface JSONIntApi {
+	/**
+	 * Bigint aware JSON parser.
+	 *
+	 * @remarks
+	 * Returns `unknown`, so validate or cast the result to an application-specific type.
+	 *
+	 * Unquoted JSON number tokens are parsed to BigInt when outside the safe integer range, otherwise
+	 * to number.
+	 */
+	parse(
+		source: string,
+		reviver?: (this: unknown, key: string, value: unknown) => unknown,
+		options?: {
+			strict?: boolean;
+			fallbackTo?: 'number' | 'string' | 'error';
+		},
+	): unknown;
+
+	/**
+	 * BigInt aware JSON stringify.
+	 *
+	 * @remarks
+	 * - BigInt is stringified as an unquoted JSON number token.
+	 * - Parsing the result may yield `number` or `bigint` depending on the value and parse options.
+	 * - Returns `undefined` for top-level values that JSON cannot represent, matching `JSON.stringify`
+	 *   behavior.
+	 */
+	stringify(
+		value: unknown,
+		replacer?:
+			| ((this: unknown, key: string, value: unknown) => unknown)
+			| ReadonlyArray<string | number>,
+		space?: string | number,
+	): string | undefined;
+}
+
+interface ParseOptions {
 	strict?: boolean;
 	fallbackTo?: 'number' | 'string' | 'error';
 }
@@ -336,7 +380,7 @@ function walkReviver(
 	return reviver.call(holder, key, current);
 }
 
-export function parse(source: string, reviver?: ReviverFn, options?: ParseOptions): unknown {
+function parse(source: string, reviver?: ReviverFn, options?: ParseOptions): unknown {
 	const strict = options?.strict === true;
 	const fallbackTo = options?.fallbackTo ?? 'number';
 	if (fallbackTo !== 'number' && fallbackTo !== 'string' && fallbackTo !== 'error') {
@@ -374,7 +418,7 @@ function unboxBoxedPrimitive(value: unknown): unknown {
 	return value;
 }
 
-export function stringify(
+function stringify(
 	value: unknown,
 	replacer?: ReplacerFn | ReplacerList,
 	space?: string | number,
@@ -476,10 +520,3 @@ export function stringify(
 	const out = serialize(root, '');
 	return out;
 }
-
-export const JSONInt = Object.freeze({
-	parse,
-	stringify,
-});
-
-export default JSONInt;
