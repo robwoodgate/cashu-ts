@@ -1,4 +1,9 @@
-import { HttpResponseError, NetworkError, MintOperationError } from '../model/Errors';
+import {
+	HttpResponseError,
+	NetworkError,
+	MintOperationError,
+	RateLimitError,
+} from '../model/Errors';
 import { type Logger, NULL_LOGGER } from '../logger';
 import { type Nut19Policy } from '../model/types';
 import { JSONInt } from '../utils/JSONInt';
@@ -36,6 +41,39 @@ export type ApiError = {
 	detail?: unknown;
 	error?: string;
 };
+
+/**
+ * Parses a `Retry-After` header value into milliseconds.
+ *
+ * Supports both forms defined in RFC 9110 §10.2.3:
+ *
+ * - **delta-seconds**: an integer number of seconds (e.g. `"30"` → 30 000 ms)
+ * - **HTTP-date**: an IMF-fixdate string (e.g. `"Sun, 05 Apr 2026 12:00:00 GMT"`)
+ *
+ * Returns `undefined` when the header is `null`, empty, or unparseable. Negative delays are clamped
+ * to `0`.
+ */
+export function parseRetryAfter(header: string | null): number | undefined {
+	if (header === null) return undefined;
+
+	const header_value = header.trim();
+	if (header_value === '') return undefined;
+
+	//delta-seconds (non-negative integer)
+	if (/^\d+$/.test(header_value)) {
+		return Math.max(Number(header_value) * 1000, 0);
+	}
+
+	//HTTP-date (must contain at least one letter, e.g. month name / day name)
+	if (/[a-zA-Z]/.test(header_value)) {
+		const date = new Date(header_value).getTime();
+		if (!Number.isNaN(date)) {
+			return Math.max(date - Date.now(), 0);
+		}
+	}
+
+	return undefined;
+}
 
 let globalRequestOptions: Partial<RequestOptions> = {};
 let requestLogger = NULL_LOGGER;
@@ -300,6 +338,11 @@ async function _request(options: RequestOptions): Promise<unknown> {
 			errorData = parseErrorBody(await response.text());
 		} catch {
 			errorData = { error: 'bad response' };
+		}
+
+		if (response.status === 429) {
+			const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'));
+			throw new RateLimitError('429 Too Many Requests', retryAfterMs);
 		}
 
 		if (

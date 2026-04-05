@@ -1384,6 +1384,13 @@ export type ProofState = {
     witness: string | null;
 };
 
+// @public
+export class RateLimitError extends HttpResponseError {
+    constructor(message: string, retryAfterMs?: number | undefined);
+    // (undocumented)
+    readonly retryAfterMs?: number | undefined;
+}
+
 // @public (undocumented)
 export type RawBlindedMessage = {
     B_: WeierstrassPoint<bigint>;

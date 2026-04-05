@@ -23,6 +23,22 @@ export class NetworkError extends Error {
 }
 
 /**
+ * This error is thrown when the server responds with 429 Too Many Requests. `retryAfterMs` is the
+ * parsed `Retry-After` header in milliseconds, or `undefined` when the header is absent or
+ * unparseable.
+ */
+export class RateLimitError extends HttpResponseError {
+	constructor(
+		message: string,
+		public readonly retryAfterMs?: number,
+	) {
+		super(message, 429);
+		this.name = 'RateLimitError';
+		Object.setPrototypeOf(this, RateLimitError.prototype);
+	}
+}
+
+/**
  * This error is thrown when a [protocol
  * error](https://github.com/cashubtc/nuts/blob/main/00.md#errors) occurs. See error codes
  * [here](https://github.com/cashubtc/nuts/blob/main/error_codes.md).

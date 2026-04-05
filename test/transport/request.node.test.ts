@@ -1,9 +1,16 @@
 import { beforeAll, beforeEach, test, describe, expect, afterAll, afterEach, vi } from 'vitest';
-import { Wallet, HttpResponseError, NetworkError, MintOperationError } from '../../src';
+import {
+	Wallet,
+	HttpResponseError,
+	NetworkError,
+	MintOperationError,
+	RateLimitError,
+} from '../../src';
 import { HttpResponse, http, delay } from 'msw';
 import { setupServer } from 'msw/node';
 import { setGlobalRequestOptions } from '../../src';
 import request, { setRequestLogger } from '../../src/transport';
+import { parseRetryAfter } from '../../src/transport/request';
 import { MINTCACHE } from '../consts';
 import { Nut19Policy } from '../../src';
 import { NULL_LOGGER, type Logger } from '../../src/logger';
@@ -475,7 +482,7 @@ describe('requests', { timeout: 7500 }, () => {
 				}),
 			);
 
-			await expect(request({ endpoint, ...retryPolicy })).rejects.toThrow(HttpResponseError);
+			await expect(request({ endpoint, ...retryPolicy })).rejects.toThrow(RateLimitError);
 			expect(requestCount).toBe(1);
 		});
 
@@ -928,5 +935,120 @@ describe('requests', { timeout: 7500 }, () => {
 				vi.useRealTimers();
 			}
 		});
+	});
+});
+
+describe('parseRetryAfter', () => {
+	test('returns undefined for null', () => {
+		expect(parseRetryAfter(null)).toBeUndefined();
+	});
+
+	test('returns undefined for empty string', () => {
+		expect(parseRetryAfter('')).toBeUndefined();
+	});
+
+	test('parses delta-seconds to milliseconds', () => {
+		expect(parseRetryAfter('30')).toBe(30_000);
+	});
+
+	test('parses zero delta-seconds', () => {
+		expect(parseRetryAfter('0')).toBe(0);
+	});
+
+	test('returns undefined for non-integer delta-seconds', () => {
+		expect(parseRetryAfter('3.5')).toBeUndefined();
+	});
+
+	test('returns undefined for negative delta-seconds string', () => {
+		// Negative values like "-1" don't match /^\d+$/ and contain no letters so bypass HTTP-date parsing too, returning undefined directly
+		expect(parseRetryAfter('-1')).toBeUndefined();
+	});
+
+	test('parses HTTP-date in the future', () => {
+		const futureDate = new Date(Date.now() + 60_000).toUTCString();
+		const result = parseRetryAfter(futureDate);
+		expect(result).toBeGreaterThan(55_000);
+		expect(result).toBeLessThanOrEqual(60_000);
+	});
+
+	test('clamps HTTP-date in the past to 0', () => {
+		const pastDate = new Date(Date.now() - 10_000).toUTCString();
+		expect(parseRetryAfter(pastDate)).toBe(0);
+	});
+
+	test('returns undefined for garbage string', () => {
+		expect(parseRetryAfter('not-a-date-or-number')).toBeUndefined();
+	});
+});
+
+describe('RateLimitError', () => {
+	test('is an instance of HttpResponseError', () => {
+		const err = new RateLimitError('rate limited');
+		expect(err).toBeInstanceOf(HttpResponseError);
+		expect(err).toBeInstanceOf(RateLimitError);
+		expect(err).toBeInstanceOf(Error);
+	});
+
+	test('has status 429', () => {
+		const err = new RateLimitError('rate limited');
+		expect(err.status).toBe(429);
+	});
+
+	test('has name RateLimitError', () => {
+		const err = new RateLimitError('rate limited');
+		expect(err.name).toBe('RateLimitError');
+	});
+
+	test('stores retryAfterMs when provided', () => {
+		const err = new RateLimitError('rate limited', 5000);
+		expect(err.retryAfterMs).toBe(5000);
+	});
+
+	test('retryAfterMs is undefined when omitted', () => {
+		const err = new RateLimitError('rate limited');
+		expect(err.retryAfterMs).toBeUndefined();
+	});
+
+	test('thrown on 429 with Retry-After header parsed', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return new HttpResponse(JSON.stringify({ error: 'Too Many Requests' }), {
+					status: 429,
+					headers: { 'Retry-After': '60' },
+				});
+			}),
+		);
+
+		try {
+			await request({ endpoint });
+			expect.unreachable();
+		} catch (e) {
+			expect(e).toBeInstanceOf(RateLimitError);
+			const err = e as InstanceType<typeof RateLimitError>;
+			expect(err.message).toBe('429 Too Many Requests');
+			expect(err.status).toBe(429);
+			expect(err.retryAfterMs).toBe(60_000);
+		}
+	});
+
+	test('thrown on 429 without Retry-After header', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return new HttpResponse(JSON.stringify({ error: 'Too Many Requests' }), {
+					status: 429,
+				});
+			}),
+		);
+
+		try {
+			await request({ endpoint });
+			expect.unreachable();
+		} catch (e) {
+			expect(e).toBeInstanceOf(RateLimitError);
+			const err = e as InstanceType<typeof RateLimitError>;
+			expect(err.retryAfterMs).toBeUndefined();
+		}
 	});
 });
