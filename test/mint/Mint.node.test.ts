@@ -1,7 +1,17 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client, Server, WebSocket } from 'mock-socket';
-import { Mint, MintInfo, MeltQuoteState, WSConnection, injectWebSocketImpl } from '../../src';
+import {
+	Mint,
+	MintInfo,
+	MeltQuoteState,
+	WSConnection,
+	injectWebSocketImpl,
+	RateLimitError,
+} from '../../src';
 import type { AuthProvider, Logger } from '../../src';
+import { HttpResponse, http } from 'msw';
+import { setupServer } from 'msw/node';
+import { MINTINFORESP } from '../consts';
 
 type ReqArgs = {
 	endpoint: string;
@@ -701,5 +711,125 @@ describe('Mint normalization', () => {
 			e: expect.any(Error),
 		});
 		expect(mint.webSocketConnection).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// msw-based tests for lastResponseMetadata
+// ---------------------------------------------------------------------------
+const mswMintUrl = 'https://meta-test-mint.localhost:4444';
+const mswServer = setupServer();
+
+beforeAll(() => {
+	mswServer.listen({ onUnhandledRequest: 'error' });
+});
+
+afterEach(() => {
+	mswServer.resetHandlers();
+});
+
+afterAll(() => {
+	mswServer.close();
+});
+
+describe('Mint.lastResponseMetadata', () => {
+	it('is undefined before any request', () => {
+		const mint = new Mint(mswMintUrl);
+		expect(mint.lastResponseMetadata).toBeUndefined();
+	});
+
+	it('is populated after a successful request — status 200', async () => {
+		mswServer.use(
+			http.get(mswMintUrl + '/v1/info', () => {
+				return HttpResponse.json(MINTINFORESP);
+			}),
+		);
+		const mint = new Mint(mswMintUrl);
+		await mint.getInfo();
+
+		expect(mint.lastResponseMetadata).toBeDefined();
+		expect(mint.lastResponseMetadata!.status).toBe(200);
+	});
+
+	it('updates to reflect the most recent response after multiple requests', async () => {
+		mswServer.use(
+			http.get(mswMintUrl + '/v1/info', () => {
+				return HttpResponse.json(MINTINFORESP);
+			}),
+			http.get(mswMintUrl + '/v1/keys', () => {
+				return HttpResponse.json(
+					{ keysets: [] },
+					{ headers: { RateLimit: 'limit=100, remaining=50, reset=30' } },
+				);
+			}),
+		);
+		const mint = new Mint(mswMintUrl);
+
+		await mint.getInfo();
+		expect(mint.lastResponseMetadata!.rateLimit).toBeUndefined();
+
+		await mint.getKeys();
+		expect(mint.lastResponseMetadata!.rateLimit).toBe('limit=100, remaining=50, reset=30');
+	});
+
+	it('rateLimit is populated when the RateLimit header is present', async () => {
+		mswServer.use(
+			http.get(mswMintUrl + '/v1/info', () => {
+				return HttpResponse.json(MINTINFORESP, {
+					headers: {
+						RateLimit: 'limit=200, remaining=199, reset=60',
+						'RateLimit-Policy': '200;w=60',
+					},
+				});
+			}),
+		);
+		const mint = new Mint(mswMintUrl);
+		await mint.getInfo();
+
+		expect(mint.lastResponseMetadata).toBeDefined();
+		expect(mint.lastResponseMetadata!.rateLimit).toBe('limit=200, remaining=199, reset=60');
+		expect(mint.lastResponseMetadata!.rateLimitPolicy).toBe('200;w=60');
+	});
+
+	it('after a 429, lastResponseMetadata has status 429 and retryAfterMs even though RateLimitError was thrown', async () => {
+		mswServer.use(
+			http.get(mswMintUrl + '/v1/keys', () => {
+				return new HttpResponse(JSON.stringify({ error: 'Too Many Requests' }), {
+					status: 429,
+					headers: { 'Retry-After': '30' },
+				});
+			}),
+		);
+		const mint = new Mint(mswMintUrl);
+
+		await expect(mint.getKeys()).rejects.toThrow(RateLimitError);
+		expect(mint.lastResponseMetadata).toBeDefined();
+		expect(mint.lastResponseMetadata!.status).toBe(429);
+		expect(mint.lastResponseMetadata!.retryAfterMs).toBe(30_000);
+	});
+
+	it('two separate Mint instances have independent lastResponseMetadata', async () => {
+		const mintUrl2 = 'https://meta-test-mint2.localhost:5555';
+		mswServer.use(
+			http.get(mswMintUrl + '/v1/info', () => {
+				return HttpResponse.json(MINTINFORESP, {
+					headers: { RateLimit: 'limit=100, remaining=99, reset=60' },
+				});
+			}),
+			http.get(mintUrl2 + '/v1/info', () => {
+				return HttpResponse.json(MINTINFORESP, {
+					headers: { RateLimit: 'limit=50, remaining=10, reset=30' },
+				});
+			}),
+		);
+
+		const mint1 = new Mint(mswMintUrl);
+		const mint2 = new Mint(mintUrl2);
+
+		await mint1.getInfo();
+		await mint2.getInfo();
+
+		expect(mint1.lastResponseMetadata!.rateLimit).toBe('limit=100, remaining=99, reset=60');
+		expect(mint2.lastResponseMetadata!.rateLimit).toBe('limit=50, remaining=10, reset=30');
 	});
 });

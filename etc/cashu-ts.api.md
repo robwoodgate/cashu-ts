@@ -761,6 +761,7 @@ export class Mint {
     getKeys(keysetId?: string, mintUrl?: string, customRequest?: RequestFn): Promise<GetKeysResponse>;
     getKeySets(customRequest?: RequestFn): Promise<GetKeysetsResponse>;
     getLazyMintInfo(customRequest?: RequestFn): Promise<MintInfo>;
+    get lastResponseMetadata(): ResponseMeta | undefined;
     melt<TRes extends Record<string, unknown> = Record<string, unknown>>(method: string, meltPayload: MeltRequest, options?: {
         customRequest?: RequestFn;
         normalize?: (raw: Record<string, unknown>) => MeltQuoteBaseResponse & TRes;
@@ -1472,6 +1473,17 @@ export type RequestFn = <T = unknown>(args: RequestOptions) => Promise<T>;
 // @public (undocumented)
 export type RequestOptions = RequestArgs & Omit<RequestInit, 'body' | 'headers'> & Partial<Nut19Policy> & {
     requestTimeout?: number;
+    onResponseMeta?: (meta: ResponseMeta) => void;
+};
+
+// @public
+export type ResponseMeta = {
+    endpoint: string;
+    status: number;
+    retryAfterMs?: number;
+    rateLimit?: string;
+    rateLimitPolicy?: string;
+    headers: Headers;
 };
 
 // @public (undocumented)

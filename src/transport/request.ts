@@ -4,7 +4,7 @@ import {
 	MintOperationError,
 	RateLimitError,
 } from '../model/Errors';
-import { type Logger, NULL_LOGGER } from '../logger';
+import { type Logger, NULL_LOGGER, safeCallback } from '../logger';
 import { type Nut19Policy } from '../model/types';
 import { JSONInt } from '../utils/JSONInt';
 
@@ -18,6 +18,40 @@ export type RequestArgs = {
 	logger?: Logger;
 };
 
+/**
+ * Metadata extracted from every HTTP response. When `onResponseMeta` is provided in
+ * `RequestOptions`, the callback receives one of these on every response (both successes and
+ * errors) before the promise resolves or rejects.
+ */
+export type ResponseMeta = {
+	/**
+	 * The request endpoint URL. Useful for global callbacks to identify which mint the response came
+	 * from.
+	 */
+	endpoint: string;
+	/**
+	 * HTTP status code of the response.
+	 */
+	status: number;
+	/**
+	 * Parsed `Retry-After` in ms (via `parseRetryAfter`). Present only when the header exists and is
+	 * parseable.
+	 */
+	retryAfterMs?: number;
+	/**
+	 * Raw value of the `RateLimit` (or Cloudflare `Ratelimit`) header, if present.
+	 */
+	rateLimit?: string;
+	/**
+	 * Raw value of the `RateLimit-Policy` (or Cloudflare `Ratelimit-Policy`) header, if present.
+	 */
+	rateLimitPolicy?: string;
+	/**
+	 * Full raw response headers.
+	 */
+	headers: Headers;
+};
+
 export type RequestOptions = RequestArgs &
 	Omit<RequestInit, 'body' | 'headers'> &
 	Partial<Nut19Policy> & {
@@ -27,6 +61,12 @@ export type RequestOptions = RequestArgs &
 		 * connection can consume the entire TTL retry window.
 		 */
 		requestTimeout?: number;
+		/**
+		 * Optional callback invoked on every HTTP response with structured rate-limit metadata. Fires
+		 * before the promise resolves (on success) or rejects (on error), so consumers always receive
+		 * metadata even when the request fails.
+		 */
+		onResponseMeta?: (meta: ResponseMeta) => void;
 	};
 
 /**
@@ -245,6 +285,7 @@ async function _request(options: RequestOptions): Promise<unknown> {
 		requestBody,
 		headers: requestHeaders,
 		requestTimeout,
+		onResponseMeta,
 		// consumed by requestWithRetry, excluded from raw fetch options
 		cached_endpoints,
 		ttl,
@@ -332,6 +373,26 @@ async function _request(options: RequestOptions): Promise<unknown> {
 		cleanupAbortListeners?.();
 	}
 
+	// Parse Retry-After once for reuse in both ResponseMeta and RateLimitError
+	const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'));
+
+	// Build and fire ResponseMeta callback before any throw or return
+	if (onResponseMeta && response.headers) {
+		const meta: ResponseMeta = {
+			endpoint,
+			status: response.status,
+			retryAfterMs,
+			rateLimit: response.headers.get('RateLimit') ?? undefined,
+			rateLimitPolicy: response.headers.get('RateLimit-Policy') ?? undefined,
+			headers: response.headers,
+		};
+		safeCallback(onResponseMeta, meta, requestLogger, {
+			op: 'request.onResponseMeta',
+			status: response.status,
+			endpoint,
+		});
+	}
+
 	if (!response.ok) {
 		let errorData: ApiError;
 		try {
@@ -341,7 +402,6 @@ async function _request(options: RequestOptions): Promise<unknown> {
 		}
 
 		if (response.status === 429) {
-			const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'));
 			throw new RateLimitError('429 Too Many Requests', retryAfterMs);
 		}
 
@@ -406,6 +466,29 @@ function parseErrorBody(errorText: string): ApiError {
  * endpoints without retry logic.
  */
 export default async function request<T>(options: RequestOptions): Promise<T> {
-	const data = await requestWithRetry({ ...options, ...globalRequestOptions });
+	const perRequest = options.onResponseMeta;
+	const globalMeta = globalRequestOptions.onResponseMeta;
+	const merged: RequestOptions = { ...options, ...globalRequestOptions };
+
+	// Default: per-request callback only
+	if (perRequest) merged.onResponseMeta = perRequest;
+
+	// Both set: wrap in safeCallback so a throw in one doesn't prevent the other from firing.
+	if (perRequest && globalMeta && perRequest !== globalMeta) {
+		merged.onResponseMeta = (meta) => {
+			safeCallback(perRequest, meta, requestLogger, {
+				op: 'request.onResponseMeta',
+				scope: 'per-request',
+				endpoint: options.endpoint,
+			});
+			safeCallback(globalMeta, meta, requestLogger, {
+				op: 'request.onResponseMeta',
+				scope: 'global',
+				endpoint: options.endpoint,
+			});
+		};
+	}
+
+	const data = await requestWithRetry(merged);
 	return data as T;
 }

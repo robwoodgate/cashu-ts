@@ -17,6 +17,7 @@ import request, {
 	setRequestLogger,
 	type RequestFn,
 	type RequestOptions,
+	type ResponseMeta,
 } from '../transport';
 import {
 	isObj,
@@ -66,6 +67,10 @@ class Mint {
 	private _logger: Logger;
 	private _mintInfo?: MintInfo;
 	private _authProvider?: AuthProvider;
+	private _lastResponseMetadata: ResponseMeta | undefined = undefined;
+	private readonly _captureResponseMetadata = (meta: ResponseMeta): void => {
+		this._lastResponseMetadata = meta;
+	};
 
 	/**
 	 * @param mintUrl Requires mint URL to create this object.
@@ -90,6 +95,20 @@ class Mint {
 
 	get mintUrl() {
 		return this._mintUrl;
+	}
+
+	/**
+	 * Metadata from the most recent HTTP response, including rate-limit headers.
+	 *
+	 * `undefined` before any request has been made.
+	 *
+	 * @remarks
+	 * A convenience for coarse backoff planning. This getter is not request-scoped and may be
+	 * overwritten by concurrent requests. For more precise tracking, use the global `onResponseMeta`
+	 * callback. Rate limit policy is not widely supported, so ensure you handle `429` responses.
+	 */
+	get lastResponseMetadata(): ResponseMeta | undefined {
+		return this._lastResponseMetadata;
 	}
 
 	/**
@@ -126,6 +145,7 @@ class Mint {
 		const requestInstance = customRequest ?? this._request;
 		const response = await requestInstance<GetInfoResponse>({
 			endpoint: joinUrls(this._mintUrl, '/v1/info'),
+			onResponseMeta: this._captureResponseMetadata,
 		});
 		return MintInfo.normalizeInfo(response);
 	}
@@ -662,6 +682,7 @@ class Mint {
 			endpoint: keysetId
 				? joinUrls(targetUrl, '/v1/keys', keysetId)
 				: joinUrls(targetUrl, '/v1/keys'),
+			onResponseMeta: this._captureResponseMetadata,
 		});
 
 		if (!isObj(data) || !Array.isArray(data.keysets)) {
@@ -685,6 +706,7 @@ class Mint {
 		const requestInstance = customRequest ?? this._request;
 		const data = await requestInstance<GetKeysetsResponse>({
 			endpoint: joinUrls(this._mintUrl, '/v1/keysets'),
+			onResponseMeta: this._captureResponseMetadata,
 		});
 		if (!isObj(data) || !Array.isArray(data.keysets)) {
 			this._logger.error('Invalid response from mint...', { data, op: 'getKeySets' });
@@ -712,6 +734,7 @@ class Mint {
 			endpoint: joinUrls(this._mintUrl, '/v1/restore'),
 			method: 'POST',
 			requestBody: restorePayload,
+			onResponseMeta: this._captureResponseMetadata,
 		});
 
 		if (!isObj(data) || !Array.isArray(data?.outputs) || !Array.isArray(data?.signatures)) {
@@ -848,6 +871,7 @@ class Mint {
 			method,
 			headers,
 			...(nut19?.supported && nut19.params ? nut19.params : {}),
+			onResponseMeta: this._captureResponseMetadata,
 		});
 	}
 

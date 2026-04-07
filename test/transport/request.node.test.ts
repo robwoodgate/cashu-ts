@@ -5,6 +5,7 @@ import {
 	NetworkError,
 	MintOperationError,
 	RateLimitError,
+	type ResponseMeta,
 } from '../../src';
 import { HttpResponse, http, delay } from 'msw';
 import { setupServer } from 'msw/node';
@@ -25,10 +26,14 @@ beforeAll(() => {
 
 afterEach(() => {
 	server.resetHandlers();
+	setRequestLogger(NULL_LOGGER);
+	setGlobalRequestOptions({});
 });
 
 afterAll(() => {
 	server.close();
+	setRequestLogger(NULL_LOGGER);
+	setGlobalRequestOptions({});
 });
 
 beforeEach(() => {
@@ -238,6 +243,7 @@ describe('requests', { timeout: 7500 }, () => {
 		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
 			ok: false,
 			status: 503,
+			headers: new Headers(),
 			text: vi.fn(async () => {
 				throw new Error('body read failed');
 			}),
@@ -1050,5 +1056,313 @@ describe('RateLimitError', () => {
 			const err = e as InstanceType<typeof RateLimitError>;
 			expect(err.retryAfterMs).toBeUndefined();
 		}
+	});
+});
+
+describe('onResponseMeta callback', () => {
+	test('fires on 200 response with full meta', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json(
+					{ keysets: [] },
+					{
+						headers: {
+							RateLimit: 'limit=100, remaining=99, reset=60',
+							'RateLimit-Policy': '100;w=60',
+						},
+					},
+				);
+			}),
+		);
+
+		let captured: ResponseMeta | undefined;
+		await request({ endpoint, onResponseMeta: (m) => (captured = m) });
+
+		expect(captured).toBeDefined();
+		expect(captured!.endpoint).toBe(endpoint);
+		expect(captured!.status).toBe(200);
+		expect(captured!.rateLimit).toBe('limit=100, remaining=99, reset=60');
+		expect(captured!.rateLimitPolicy).toBe('100;w=60');
+		expect(captured!.retryAfterMs).toBeUndefined();
+		expect(captured!.headers).toBeInstanceOf(Headers);
+	});
+
+	test('fires on 429 BEFORE RateLimitError is thrown', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return new HttpResponse(JSON.stringify({ error: 'Too Many Requests' }), {
+					status: 429,
+					headers: { 'Retry-After': '30' },
+				});
+			}),
+		);
+
+		let captured: ResponseMeta | undefined;
+		try {
+			await request({ endpoint, onResponseMeta: (m) => (captured = m) });
+			expect.unreachable();
+		} catch (e) {
+			expect(e).toBeInstanceOf(RateLimitError);
+		}
+		expect(captured).toBeDefined();
+		expect(captured!.endpoint).toBe(endpoint);
+		expect(captured!.status).toBe(429);
+		expect(captured!.retryAfterMs).toBe(30_000);
+	});
+
+	test('fires on other 4xx BEFORE HttpResponseError is thrown', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return new HttpResponse(JSON.stringify({ error: 'Not Found' }), { status: 404 });
+			}),
+		);
+
+		let captured: ResponseMeta | undefined;
+		try {
+			await request({ endpoint, onResponseMeta: (m) => (captured = m) });
+			expect.unreachable();
+		} catch (e) {
+			expect(e).toBeInstanceOf(HttpResponseError);
+		}
+		expect(captured).toBeDefined();
+		expect(captured!.endpoint).toBe(endpoint);
+		expect(captured!.status).toBe(404);
+	});
+
+	test('fires on 5xx BEFORE HttpResponseError is thrown', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return new HttpResponse(JSON.stringify({ error: 'Internal Server Error' }), {
+					status: 500,
+				});
+			}),
+		);
+
+		let captured: ResponseMeta | undefined;
+		try {
+			await request({ endpoint, onResponseMeta: (m) => (captured = m) });
+			expect.unreachable();
+		} catch (e) {
+			expect(e).toBeInstanceOf(HttpResponseError);
+		}
+		expect(captured).toBeDefined();
+		expect(captured!.endpoint).toBe(endpoint);
+		expect(captured!.status).toBe(500);
+	});
+
+	test('reads Cloudflare lowercase Ratelimit header variant', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json(
+					{ keysets: [] },
+					{
+						headers: {
+							Ratelimit: 'limit=50, remaining=49, reset=30',
+							'Ratelimit-Policy': '50;w=30',
+						},
+					},
+				);
+			}),
+		);
+
+		let captured: ResponseMeta | undefined;
+		await request({ endpoint, onResponseMeta: (m) => (captured = m) });
+
+		expect(captured).toBeDefined();
+		expect(captured!.endpoint).toBe(endpoint);
+		expect(captured!.rateLimit).toBe('limit=50, remaining=49, reset=30');
+		expect(captured!.rateLimitPolicy).toBe('50;w=30');
+	});
+
+	test('no callback means no error and identical behaviour', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		// No onResponseMeta — should not throw
+		const result = await request({ endpoint });
+		expect(result).toEqual({ keysets: [] });
+	});
+
+	test('rateLimit and rateLimitPolicy are undefined when headers absent', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		let captured: ResponseMeta | undefined;
+		await request({ endpoint, onResponseMeta: (m) => (captured = m) });
+
+		expect(captured).toBeDefined();
+		expect(captured!.endpoint).toBe(endpoint);
+		expect(captured!.rateLimit).toBeUndefined();
+		expect(captured!.rateLimitPolicy).toBeUndefined();
+	});
+
+	test('throwing callback is swallowed via safeCallback', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		const warnSpy = vi.fn();
+		setRequestLogger({ ...NULL_LOGGER, warn: warnSpy });
+
+		const result = await request({
+			endpoint,
+			onResponseMeta: () => {
+				throw new Error('boom');
+			},
+		});
+
+		setRequestLogger(NULL_LOGGER);
+
+		expect(result).toEqual({ keysets: [] });
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(warnSpy).toHaveBeenCalledWith(
+			'callback failed',
+			expect.objectContaining({
+				op: 'request.onResponseMeta',
+				endpoint,
+				error: expect.any(Error),
+			}),
+		);
+	});
+
+	test('async rejection in callback does not produce unhandled rejection', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		const warnSpy = vi.fn();
+		setRequestLogger({ ...NULL_LOGGER, warn: warnSpy });
+
+		const result = await request({
+			endpoint,
+			onResponseMeta: async () => {
+				throw new Error('async boom');
+			},
+		});
+
+		// Give microtask queue time to flush so the .catch handler fires
+		await new Promise((r) => setTimeout(r, 10));
+
+		setRequestLogger(NULL_LOGGER);
+
+		expect(result).toEqual({ keysets: [] });
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(warnSpy).toHaveBeenCalledWith(
+			'callback failed',
+			expect.objectContaining({
+				op: 'request.onResponseMeta',
+				endpoint,
+				error: expect.any(Error),
+			}),
+		);
+	});
+
+	test('composes per-request and global callbacks', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		const perRequestSpy = vi.fn();
+		const globalSpy = vi.fn();
+
+		setGlobalRequestOptions({ onResponseMeta: globalSpy });
+
+		await request({ endpoint, onResponseMeta: perRequestSpy });
+
+		setGlobalRequestOptions({});
+
+		expect(perRequestSpy).toHaveBeenCalledOnce();
+		expect(globalSpy).toHaveBeenCalledOnce();
+		expect(perRequestSpy.mock.calls[0][0].endpoint).toBe(endpoint);
+		expect(globalSpy.mock.calls[0][0].endpoint).toBe(endpoint);
+	});
+
+	test('global callback fires even when per-request callback throws sync', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		const globalSpy = vi.fn();
+		const warnSpy = vi.fn();
+		setRequestLogger({ ...NULL_LOGGER, warn: warnSpy });
+		setGlobalRequestOptions({ onResponseMeta: globalSpy });
+
+		const result = await request({
+			endpoint,
+			onResponseMeta: () => {
+				throw new Error('per-request boom');
+			},
+		});
+
+		setGlobalRequestOptions({});
+		setRequestLogger(NULL_LOGGER);
+
+		expect(result).toEqual({ keysets: [] });
+		expect(globalSpy).toHaveBeenCalledOnce();
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(warnSpy).toHaveBeenCalledWith(
+			'callback failed',
+			expect.objectContaining({ scope: 'per-request' }),
+		);
+	});
+
+	test('global callback fires even when per-request callback rejects async', async () => {
+		const endpoint = mintUrl + '/v1/keys';
+		server.use(
+			http.get(endpoint, () => {
+				return HttpResponse.json({ keysets: [] });
+			}),
+		);
+
+		const globalSpy = vi.fn();
+		const warnSpy = vi.fn();
+		setRequestLogger({ ...NULL_LOGGER, warn: warnSpy });
+		setGlobalRequestOptions({ onResponseMeta: globalSpy });
+
+		const result = await request({
+			endpoint,
+			onResponseMeta: async () => {
+				throw new Error('per-request async boom');
+			},
+		});
+
+		// flush microtask queue for async .catch handler
+		await new Promise((r) => setTimeout(r, 10));
+
+		setGlobalRequestOptions({});
+		setRequestLogger(NULL_LOGGER);
+
+		expect(result).toEqual({ keysets: [] });
+		expect(globalSpy).toHaveBeenCalledOnce();
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(warnSpy).toHaveBeenCalledWith(
+			'callback failed',
+			expect.objectContaining({ scope: 'per-request' }),
+		);
 	});
 });
