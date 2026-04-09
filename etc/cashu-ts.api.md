@@ -117,6 +117,24 @@ export interface AuthProvider {
 }
 
 // @public
+export interface BatchMintPreview<TQuote extends Pick<MintQuoteBaseResponse, 'quote' | 'pubkey'> = MintQuoteBaseResponse> {
+    keysetId: string;
+    // (undocumented)
+    method: string;
+    outputData: OutputDataLike[];
+    payload: BatchMintRequest;
+    quotes: TQuote[];
+}
+
+// @public
+export type BatchMintRequest = {
+    quotes: string[];
+    quote_amounts: bigint[];
+    outputs: SerializedBlindedMessage[];
+    signatures?: Array<string | null>;
+};
+
+// @public
 export function blindMessage(secret: Uint8Array, r?: bigint): RawBlindedMessage;
 
 // @public (undocumented)
@@ -301,6 +319,9 @@ export type DLEQ = {
 
 // @public (undocumented)
 export type Enumerate<N extends number, Acc extends number[] = []> = Acc['length'] extends N ? Acc[number] : Enumerate<N, [...Acc, Acc['length']]>;
+
+// @public
+export function findSigningKey(pubkey: string, privkeys: string | string[]): string;
 
 // @public
 export function getDataField(secret: Secret | string): string;
@@ -776,6 +797,12 @@ export class Mint {
         customRequest?: RequestFn;
         normalize?: (raw: Record<string, unknown>) => MintResponse & TRes;
     }): Promise<MintResponse & TRes>;
+    mintBatch<TRes extends Record<string, unknown> = Record<string, unknown>>(method: string, mintPayload: BatchMintRequest, options?: {
+        customRequest?: RequestFn;
+        normalize?: (raw: Record<string, unknown>) => MintResponse & TRes;
+    }): Promise<MintResponse & TRes>;
+    mintBatchBolt11(mintPayload: BatchMintRequest, customRequest?: RequestFn): Promise<MintResponse>;
+    mintBatchBolt12(mintPayload: BatchMintRequest, customRequest?: RequestFn): Promise<MintResponse>;
     mintBolt11(mintPayload: MintRequest, customRequest?: RequestFn): Promise<MintResponse>;
     mintBolt12(mintPayload: MintRequest, customRequest?: RequestFn): Promise<MintResponse>;
     // (undocumented)
@@ -969,7 +996,7 @@ export interface MintPreview<TQuote extends Pick<MintQuoteBaseResponse, 'quote'>
 // @public
 export type MintProofsConfig = {
     keysetId?: string;
-    privkey?: string;
+    privkey?: string | string[];
     proofsWeHave?: Array<Pick<Proof, 'amount'>>;
     onCountersReserved?: OnCountersReserved;
 };
@@ -1832,6 +1859,7 @@ export class Wallet {
     checkMintQuoteBolt11(quote: string | MintQuoteBolt11Response): Promise<MintQuoteBolt11Response>;
     checkMintQuoteBolt12(quote: string): Promise<MintQuoteBolt12Response>;
     checkProofsStates(proofs: Array<Pick<Proof, 'secret'>>): Promise<ProofState[]>;
+    completeBatchMint(batchPreview: BatchMintPreview<Pick<MintQuoteBaseResponse, 'quote'>>): Promise<Proof[]>;
     completeMelt<TQuote extends Pick<MeltQuoteBaseResponse, 'quote'> = MeltQuoteBaseResponse>(meltPreview: MeltPreview<TQuote>, privkey?: string | string[], preferAsync?: boolean): Promise<MeltProofsResponse<TQuote>>;
     completeMint(mintPreview: MintPreview<Pick<MintQuoteBaseResponse, 'quote'>>): Promise<Proof[]>;
     completeSwap(swapPreview: SwapPreview, privkey?: string | string[]): Promise<SendResponse>;
@@ -1879,6 +1907,10 @@ export class Wallet {
     }, outputType?: OutputType): Promise<Proof[]>;
     readonly on: WalletEvents;
     readonly ops: WalletOps;
+    prepareBatchMint<TQuote extends Pick<MintQuoteBaseResponse, 'quote' | 'pubkey'>>(method: string, entries: Array<{
+        amount: AmountLike;
+        quote: TQuote;
+    }>, config?: MintProofsConfig, outputType?: OutputType): Promise<BatchMintPreview<TQuote>>;
     prepareMelt<TQuote extends Pick<MeltQuoteBaseResponse, 'amount' | 'quote'>>(method: string, meltQuote: TQuote, proofsToSend: Proof[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltPreview<TQuote>>;
     prepareMint<TQuote extends Pick<MintQuoteBaseResponse, 'quote'>>(method: string, amount: AmountLike, quote: TQuote, config?: MintProofsConfig, outputType?: OutputType): Promise<MintPreview<TQuote>>;
     prepareSwapToReceive(token: Token | string | Proof[], config?: ReceiveConfig, outputType?: OutputType): Promise<SwapPreview>;

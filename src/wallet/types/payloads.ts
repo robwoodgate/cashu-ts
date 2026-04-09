@@ -6,10 +6,14 @@ import {
 	type MintQuoteBaseResponse,
 	type SwapRequest,
 	type MintRequest,
+	type BatchMintRequest,
 } from '../../model/types';
 
 /**
  * Preview of a mint transaction created by prepareMint.
+ *
+ * @remarks
+ * Contains `bigint` values. Use `JSONInt.stringify`
  */
 export interface MintPreview<
 	TQuote extends Pick<MintQuoteBaseResponse, 'quote'> = MintQuoteBaseResponse,
@@ -34,7 +38,38 @@ export interface MintPreview<
 }
 
 /**
+ * Preview of a batched mint transaction created by prepareBatchMint.
+ *
+ * @remarks
+ * Contains `bigint` values. Use `JSONInt.stringify`
+ */
+export interface BatchMintPreview<
+	TQuote extends Pick<MintQuoteBaseResponse, 'quote' | 'pubkey'> = MintQuoteBaseResponse,
+> {
+	method: string;
+	/**
+	 * Batch mint payload to be sent to the mint.
+	 */
+	payload: BatchMintRequest;
+	/**
+	 * Blinding data required to construct proofs (consolidated across all quotes).
+	 */
+	outputData: OutputDataLike[];
+	/**
+	 * Keyset ID used to prepare the outputs.
+	 */
+	keysetId: string;
+	/**
+	 * Mint Quote objects included in this batch.
+	 */
+	quotes: TQuote[];
+}
+
+/**
  * Preview of a Melt transaction created by prepareMelt.
+ *
+ * @remarks
+ * Contains `bigint` values. Use `JSONInt.stringify`
  */
 export interface MeltPreview<
 	TQuote extends Pick<MeltQuoteBaseResponse, 'quote'> = MeltQuoteBaseResponse,
@@ -60,6 +95,9 @@ export interface MeltPreview<
 
 /**
  * Includes all data required to swap inputs for outputs and construct proofs from them.
+ *
+ * @remarks
+ * Contains `bigint` values. Use `JSONInt.stringify`
  */
 export type SwapTransaction = {
 	/**
@@ -82,6 +120,9 @@ export type SwapTransaction = {
 
 /**
  * Preview of a swap transaction created by prepareSend / prepareReceive.
+ *
+ * @remarks
+ * Contains `bigint` values. Use `JSONInt.stringify`
  */
 export type SwapPreview = {
 	/**

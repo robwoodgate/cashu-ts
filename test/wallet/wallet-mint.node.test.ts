@@ -94,6 +94,334 @@ describe('requestTokens', () => {
 		expect(proofs[0]).toMatchObject({ amount: 1n, id: '00bd033559de27d0' });
 	});
 
+	test('prepareBatchMint consolidates outputs and completeBatchMint sends batch request', async () => {
+		let batchCalls = 0;
+		let capturedBody: Record<string, unknown> | undefined;
+		server.use(
+			http.post(mintUrl + '/v1/mint/bolt11/batch', async ({ request }) => {
+				batchCalls += 1;
+				capturedBody = (await request.json()) as Record<string, unknown>;
+				const body = capturedBody as {
+					quotes: string[];
+					quote_amounts: unknown[];
+					outputs: Array<{ amount: unknown }>;
+				};
+				expect(body.quotes).toEqual(['quote-a', 'quote-b']);
+				expect(body.quote_amounts).toHaveLength(2);
+				// Return one signature per output
+				return HttpResponse.json({
+					signatures: body.outputs.map((o) => ({
+						id: '00bd033559de27d0',
+						amount: o.amount,
+						C_: '0361a2725cfd88f60ded718378e8049a4a6cee32e214a9870b44c3ffea2dc9e625',
+					})),
+				});
+			}),
+		);
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quoteA: MintQuoteBolt11Response = {
+			quote: 'quote-a',
+			request: 'lnbc...',
+			amount: Amount.from(5),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+			pubkey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+		};
+		const quoteB: MintQuoteBolt11Response = {
+			quote: 'quote-b',
+			request: 'lnbc...',
+			amount: Amount.from(3),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+		};
+
+		const dummyPrivkey = '0000000000000000000000000000000000000000000000000000000000000001';
+		const batchPreview = await wallet.prepareBatchMint(
+			'bolt11',
+			[
+				{ amount: 5, quote: quoteA },
+				{ amount: 3, quote: quoteB },
+			],
+			{ privkey: dummyPrivkey },
+		);
+
+		expect(batchCalls).toBe(0);
+		expect(batchPreview.method).toBe('bolt11');
+		expect(batchPreview.quotes).toHaveLength(2);
+		// Consolidated outputs: 5+3=8 should produce fewer outputs than separate 5 and 3
+		const outputTotal = batchPreview.outputData.reduce(
+			(sum, o) => sum + BigInt(o.blindedMessage.amount),
+			0n,
+		);
+		expect(outputTotal).toBe(8n);
+
+		const proofs = await wallet.completeBatchMint(batchPreview);
+
+		expect(batchCalls).toBe(1);
+		const totalAmount = proofs.reduce((sum, p) => sum + p.amount, 0n);
+		expect(totalAmount).toBe(8n);
+		expect(proofs.every((p) => p.id === '00bd033559de27d0')).toBe(true);
+
+		// Verify NUT-20 signatures: first quote has signature, second is null
+		const sentSigs = (capturedBody as { signatures?: Array<string | null> }).signatures;
+		expect(sentSigs).toBeDefined();
+		expect(sentSigs).toHaveLength(2);
+		expect(typeof sentSigs![0]).toBe('string');
+		expect(sentSigs![1]).toBeNull();
+	});
+
+	test('prepareBatchMint matches privkeys to locked quotes by pubkey', async () => {
+		let capturedBody: Record<string, unknown> | undefined;
+		server.use(
+			http.post(mintUrl + '/v1/mint/bolt11/batch', async ({ request }) => {
+				capturedBody = (await request.json()) as Record<string, unknown>;
+				const body = capturedBody as { outputs: Array<{ amount: unknown }> };
+				return HttpResponse.json({
+					signatures: body.outputs.map((o) => ({
+						id: '00bd033559de27d0',
+						amount: o.amount,
+						C_: '0361a2725cfd88f60ded718378e8049a4a6cee32e214a9870b44c3ffea2dc9e625',
+					})),
+				});
+			}),
+		);
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const privkeyA = '0000000000000000000000000000000000000000000000000000000000000001';
+		const pubkeyA = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+		const privkeyB = '0000000000000000000000000000000000000000000000000000000000000002';
+		const pubkeyB = '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5';
+
+		const quoteA: MintQuoteBolt11Response = {
+			quote: 'locked-a',
+			request: 'lnbc...',
+			amount: Amount.from(3),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+			pubkey: pubkeyA,
+		};
+		const quoteB: MintQuoteBolt11Response = {
+			quote: 'locked-b',
+			request: 'lnbc...',
+			amount: Amount.from(2),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+			pubkey: pubkeyB,
+		};
+
+		const batchPreview = await wallet.prepareBatchMint(
+			'bolt11',
+			[
+				{ amount: 3, quote: quoteA },
+				{ amount: 2, quote: quoteB },
+			],
+			{ privkey: [privkeyA, privkeyB] },
+		);
+
+		// Both quotes are locked, so both should have signatures
+		const sentSigs = batchPreview.payload.signatures;
+		expect(sentSigs).toBeDefined();
+		expect(sentSigs).toHaveLength(2);
+		expect(typeof sentSigs![0]).toBe('string');
+		expect(typeof sentSigs![1]).toBe('string');
+		// Signatures should be different (different quote IDs)
+		expect(sentSigs![0]).not.toBe(sentSigs![1]);
+
+		// Complete the batch to verify full round-trip
+		const proofs = await wallet.completeBatchMint(batchPreview);
+		const totalAmount = proofs.reduce((sum, p) => sum + p.amount, 0n);
+		expect(totalAmount).toBe(5n);
+	});
+
+	test('prepareBatchMint omits signatures when all quotes are unlocked', async () => {
+		let capturedBody: Record<string, unknown> | undefined;
+		server.use(
+			http.post(mintUrl + '/v1/mint/bolt11/batch', async ({ request }) => {
+				capturedBody = (await request.json()) as Record<string, unknown>;
+				const body = capturedBody as { outputs: Array<{ amount: unknown }> };
+				return HttpResponse.json({
+					signatures: body.outputs.map((o) => ({
+						id: '00bd033559de27d0',
+						amount: o.amount,
+						C_: '0361a2725cfd88f60ded718378e8049a4a6cee32e214a9870b44c3ffea2dc9e625',
+					})),
+				});
+			}),
+		);
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quoteA: MintQuoteBolt11Response = {
+			quote: 'unlocked-a',
+			request: 'lnbc...',
+			amount: Amount.from(2),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+		};
+		const quoteB: MintQuoteBolt11Response = {
+			quote: 'unlocked-b',
+			request: 'lnbc...',
+			amount: Amount.from(3),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+		};
+
+		const batchPreview = await wallet.prepareBatchMint('bolt11', [
+			{ amount: 2, quote: quoteA },
+			{ amount: 3, quote: quoteB },
+		]);
+
+		// No signatures field when all quotes are unlocked
+		expect(batchPreview.payload.signatures).toBeUndefined();
+
+		const proofs = await wallet.completeBatchMint(batchPreview);
+		expect(proofs.reduce((sum, p) => sum + p.amount, 0n)).toBe(5n);
+		expect(capturedBody).not.toHaveProperty('signatures');
+	});
+
+	test('prepareBatchMint treats quotes without pubkey as unlocked even when privkey is supplied', async () => {
+		let capturedBody: Record<string, unknown> | undefined;
+		server.use(
+			http.post(mintUrl + '/v1/mint/bolt11/batch', async ({ request }) => {
+				capturedBody = (await request.json()) as Record<string, unknown>;
+				const body = capturedBody as { outputs: Array<{ amount: unknown }> };
+				return HttpResponse.json({
+					signatures: body.outputs.map((o) => ({
+						id: '00bd033559de27d0',
+						amount: o.amount,
+						C_: '0361a2725cfd88f60ded718378e8049a4a6cee32e214a9870b44c3ffea2dc9e625',
+					})),
+				});
+			}),
+		);
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quoteA = { quote: 'stored-a' };
+		const quoteB = { quote: 'stored-b' };
+
+		const privkey = '0000000000000000000000000000000000000000000000000000000000000001';
+		const batchPreview = await wallet.prepareBatchMint(
+			'bolt11',
+			[
+				{ amount: 2, quote: quoteA },
+				{ amount: 3, quote: quoteB },
+			],
+			{ privkey },
+		);
+
+		expect(batchPreview.payload.signatures).toBeUndefined();
+
+		const proofs = await wallet.completeBatchMint(batchPreview);
+		expect(proofs.reduce((sum, p) => sum + p.amount, 0n)).toBe(5n);
+		expect(capturedBody).not.toHaveProperty('signatures');
+	});
+
+	test('prepareBatchMint fails when locked quotes have no privkey', async () => {
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quote: MintQuoteBolt11Response = {
+			quote: 'locked-no-key',
+			request: 'lnbc...',
+			amount: Amount.from(1),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+			pubkey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+		};
+
+		await expect(wallet.prepareBatchMint('bolt11', [{ amount: 1, quote }])).rejects.toThrow(
+			'Can not sign locked quotes without private key',
+		);
+	});
+
+	test('prepareMint signs with privkey even when quote has no pubkey', async () => {
+		server.use(
+			http.post(mintUrl + '/v1/mint/bolt11', () => {
+				return HttpResponse.json({
+					signatures: [
+						{
+							id: '00bd033559de27d0',
+							amount: 1,
+							C_: '0361a2725cfd88f60ded718378e8049a4a6cee32e214a9870b44c3ffea2dc9e625',
+						},
+					],
+				});
+			}),
+		);
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quote: MintQuoteBolt11Response = {
+			quote: 'no-pubkey-quote',
+			request: 'lnbc...',
+			amount: Amount.from(1),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+		};
+
+		const privkey = '0000000000000000000000000000000000000000000000000000000000000001';
+		const preview = await wallet.prepareMint('bolt11', 1, quote, { privkey });
+
+		// Should still produce a signature using the provided privkey
+		expect(preview.payload.signature).toBeDefined();
+		expect(typeof preview.payload.signature).toBe('string');
+	});
+
+	test('prepareMint fails when multiple privkeys and no quote pubkey', async () => {
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quote: MintQuoteBolt11Response = {
+			quote: 'locked-mismatch',
+			request: 'lnbc...',
+			amount: Amount.from(1),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+		};
+
+		const pk1 = '0000000000000000000000000000000000000000000000000000000000000001';
+		const pk2 = '0000000000000000000000000000000000000000000000000000000000000002';
+		await expect(
+			wallet.prepareMint('bolt11', 1, quote, {
+				privkey: [pk1, pk2],
+			}),
+		).rejects.toThrow('multiple privkeys supplied for quote');
+	});
+
+	test('prepareBatchMint fails when no privkey matches locked quote pubkey', async () => {
+		const wallet = new Wallet(mint, { unit });
+		await wallet.loadMint();
+
+		const quoteA: MintQuoteBolt11Response = {
+			quote: 'locked-mismatch',
+			request: 'lnbc...',
+			amount: Amount.from(1),
+			unit: 'sat',
+			state: MintQuoteState.UNPAID,
+			expiry: null,
+			pubkey: '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5',
+		};
+
+		// privkey for sk=1 won't match sk=2's pubkey
+		const wrongPrivkey = '0000000000000000000000000000000000000000000000000000000000000001';
+		await expect(
+			wallet.prepareBatchMint('bolt11', [{ amount: 1, quote: quoteA }], { privkey: wrongPrivkey }),
+		).rejects.toThrow('No private key matches quote pubkey');
+	});
+
 	test('test requestTokens bad response', async () => {
 		server.use(
 			http.post(mintUrl + '/v1/mint/bolt11', () => {
