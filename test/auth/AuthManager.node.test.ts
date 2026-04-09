@@ -36,6 +36,7 @@ import * as utils from '../../src/utils';
 import { encodeBase64toUint8, Bytes } from '../../src/utils';
 import { OutputData } from '../../src/model/OutputData';
 import { RequestFn } from '../../src';
+import type { Logger } from '../../src/logger';
 
 const mintUrl = 'http://mint.local';
 
@@ -164,6 +165,30 @@ describe('AuthManager: CAT lifecycle', () => {
 		am['tokens'] = { accessToken: 'old-cat', expiresAt: Date.now() - 1000 };
 		const cat = await am.ensureCAT(30);
 		expect(cat).toBe('old-cat');
+	});
+});
+
+describe('AuthManager: constructor limits', () => {
+	test('clamps oversized desiredPoolSize and maxPerMint to internal cap and warns', () => {
+		const logger: Logger = {
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+			debug: vi.fn(),
+			trace: vi.fn(),
+			log: vi.fn(),
+		};
+
+		const am = new AuthManager(mintUrl, {
+			request: reqSpy as RequestFn,
+			desiredPoolSize: 1_000,
+			maxPerMint: 1_000,
+			logger,
+		});
+
+		expect(am.poolTarget).toBe(100);
+		expect(am['maxPerMint']).toBe(100);
+		expect(logger.warn).toHaveBeenCalledTimes(2);
 	});
 });
 

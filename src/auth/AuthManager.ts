@@ -26,11 +26,12 @@ import { KeyChain, type Keyset } from '../wallet';
 export type AuthManagerOptions = {
 	/**
 	 * Hard limit to target when minting BATs in one request. If omitted, we'll read
-	 * `nuts['22'].bat_max_mint` from the mint "/v1/info" endpoint.
+	 * `nuts['22'].bat_max_mint` from the mint "/v1/info" endpoint. Values above the
+	 * `AuthManager.ABSOLUTE_MAX_PER_MINT` internal hard cap are clamped.
 	 */
 	maxPerMint?: number;
 	/**
-	 * Desired BAT pool size. We’ll top-up to min(desiredPoolSize, bat_max_mint) on demand.
+	 * Desired BAT pool size. We’ll top-up to min(desiredPoolSize, maxPerMint) on demand.
 	 */
 	desiredPoolSize?: number;
 	/**
@@ -68,6 +69,8 @@ type BlindAuthMintResponse = {
  * - Supplies serialized BATs for 'Blind-auth' and CAT for 'Clear-auth'
  */
 export class AuthManager implements AuthProvider {
+	private static readonly ABSOLUTE_MAX_PER_MINT = 100;
+
 	private readonly mintUrl: string;
 	private readonly req: RequestFn;
 	private readonly logger: Logger;
@@ -82,8 +85,8 @@ export class AuthManager implements AuthProvider {
 
 	// Blind Auth Token (BAT) pool
 	private pool: Proof[] = [];
-	private desiredPoolSize = 10;
-	private maxPerMint = 10;
+	private desiredPoolSize = AuthManager.ABSOLUTE_MAX_PER_MINT;
+	private maxPerMint = AuthManager.ABSOLUTE_MAX_PER_MINT;
 
 	// Keychain for 'auth' unit
 	private keychain?: KeyChain;
@@ -92,8 +95,24 @@ export class AuthManager implements AuthProvider {
 		this.mintUrl = mintUrl;
 		this.req = opts?.request ?? request;
 		this.logger = opts?.logger ?? NULL_LOGGER;
-		this.desiredPoolSize = Math.max(1, opts?.desiredPoolSize ?? this.desiredPoolSize);
-		this.maxPerMint = Math.max(1, opts?.maxPerMint ?? this.maxPerMint);
+		const desiredPoolSize = Math.max(1, opts?.desiredPoolSize ?? this.desiredPoolSize);
+		const maxPerMint = Math.max(1, opts?.maxPerMint ?? this.maxPerMint);
+
+		this.desiredPoolSize = Math.min(desiredPoolSize, AuthManager.ABSOLUTE_MAX_PER_MINT);
+		this.maxPerMint = Math.min(maxPerMint, AuthManager.ABSOLUTE_MAX_PER_MINT);
+
+		if (this.desiredPoolSize !== desiredPoolSize) {
+			this.logger.warn('AuthManager: desiredPoolSize exceeds internal cap and was clamped', {
+				configured: desiredPoolSize,
+				clampedTo: this.desiredPoolSize,
+			});
+		}
+		if (this.maxPerMint !== maxPerMint) {
+			this.logger.warn('AuthManager: maxPerMint exceeds internal cap and was clamped', {
+				configured: maxPerMint,
+				clampedTo: this.maxPerMint,
+			});
+		}
 	}
 
 	// ------------------------------
