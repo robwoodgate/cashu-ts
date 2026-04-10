@@ -1,6 +1,14 @@
 import { type SerializedBlindedMessage } from './blinded';
 
 /**
+ * NUT-29 batch minting info advertised by the mint in the NUT-06 info response.
+ */
+export type Nut29Info = {
+  methods?: string[];
+  max_batch_size?: number;
+};
+
+/**
  * Payload that needs to be sent to the mint when requesting a NUT-29 batched mint.
  */
 export type BatchMintRequest = {

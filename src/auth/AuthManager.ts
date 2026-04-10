@@ -18,6 +18,7 @@ import {
   normalizeMintKeys,
   normalizeMintKeyset,
   normalizeSafeIntegerMetadata,
+  ABSOLUTE_MAX_PER_MINT,
 } from '../utils';
 import { KeyChain, type Keyset } from '../wallet';
 
@@ -28,7 +29,7 @@ export type AuthManagerOptions = {
   /**
    * Hard limit to target when minting BATs in one request. If omitted, we'll read
    * `nuts['22'].bat_max_mint` from the mint "/v1/info" endpoint. Values above the
-   * `AuthManager.ABSOLUTE_MAX_PER_MINT` internal hard cap are clamped.
+   * `ABSOLUTE_MAX_PER_MINT` internal hard cap are clamped.
    */
   maxPerMint?: number;
   /**
@@ -70,8 +71,6 @@ type BlindAuthMintResponse = {
  * - Supplies serialized BATs for 'Blind-auth' and CAT for 'Clear-auth'
  */
 export class AuthManager implements AuthProvider {
-  private static readonly ABSOLUTE_MAX_PER_MINT = 100;
-
   private readonly mintUrl: string;
   private readonly req: RequestFn;
   private readonly logger: Logger;
@@ -86,8 +85,8 @@ export class AuthManager implements AuthProvider {
 
   // Blind Auth Token (BAT) pool
   private pool: Proof[] = [];
-  private desiredPoolSize = AuthManager.ABSOLUTE_MAX_PER_MINT;
-  private maxPerMint = AuthManager.ABSOLUTE_MAX_PER_MINT;
+  private desiredPoolSize = ABSOLUTE_MAX_PER_MINT;
+  private maxPerMint = ABSOLUTE_MAX_PER_MINT;
 
   // Keychain for 'auth' unit
   private keychain?: KeyChain;
@@ -99,8 +98,8 @@ export class AuthManager implements AuthProvider {
     const desiredPoolSize = Math.max(1, opts?.desiredPoolSize ?? this.desiredPoolSize);
     const maxPerMint = Math.max(1, opts?.maxPerMint ?? this.maxPerMint);
 
-    this.desiredPoolSize = Math.min(desiredPoolSize, AuthManager.ABSOLUTE_MAX_PER_MINT);
-    this.maxPerMint = Math.min(maxPerMint, AuthManager.ABSOLUTE_MAX_PER_MINT);
+    this.desiredPoolSize = Math.min(desiredPoolSize, ABSOLUTE_MAX_PER_MINT);
+    this.maxPerMint = Math.min(maxPerMint, ABSOLUTE_MAX_PER_MINT);
 
     if (this.desiredPoolSize !== desiredPoolSize) {
       this.logger.warn('AuthManager: desiredPoolSize exceeds internal cap and was clamped', {
@@ -351,7 +350,7 @@ export class AuthManager implements AuthProvider {
         endpoint: joinUrls(this.mintUrl, '/v1/info'),
         method: 'GET',
       });
-      this.info = new MintInfo(info);
+      this.info = new MintInfo(info, this.logger);
     }
     if (!this.keychain) {
       // fetch blind keysets and keys for unit 'auth'

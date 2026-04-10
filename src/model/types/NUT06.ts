@@ -1,5 +1,7 @@
 import type { AmountLike } from '../Amount';
 
+import type { Nut29Info } from './NUT29';
+
 /**
  * Response from mint at /info endpoint.
  */
@@ -77,6 +79,7 @@ export type GetInfoResponse = {
       bat_max_mint: number;
       protected_endpoints: Array<{ method: 'GET' | 'POST'; path: string }>;
     };
+    '29'?: Nut29Info;
   };
   motd?: string;
 };

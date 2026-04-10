@@ -1,5 +1,5 @@
 import { HttpResponse, http } from 'msw';
-import { test, describe, expect } from 'vitest';
+import { test, describe, expect, vi } from 'vitest';
 
 import {
   Wallet,
@@ -16,7 +16,7 @@ import {
 
 import { Bytes } from '../../src/utils';
 import { hexToBytes } from '@noble/curves/utils.js';
-import { useTestServer, mint, mintUrl, unit, logger } from './_setup';
+import { useTestServer, mint, mintUrl, unit, logger, mintInfoResp } from './_setup';
 
 const server = useTestServer();
 
@@ -481,6 +481,142 @@ describe('requestTokens', () => {
     const secrets = preview.outputData.map((p) => Bytes.toHex(p.secret));
     expect(new Set(secrets).size).toBe(secrets.length);
     expect(await wallet.counters.peekNext(keysetId)).toBe(preview.outputData.length);
+  });
+});
+
+describe('NUT-29 max_batch_size enforcement', () => {
+  function makeBatchHandler() {
+    server.use(
+      http.post(mintUrl + '/v1/mint/bolt11/batch', async ({ request }) => {
+        const body = (await request.json()) as { outputs: Array<{ amount: unknown }> };
+        return HttpResponse.json({
+          signatures: body.outputs.map((o) => ({
+            id: '00bd033559de27d0',
+            amount: o.amount,
+            C_: '0361a2725cfd88f60ded718378e8049a4a6cee32e214a9870b44c3ffea2dc9e625',
+          })),
+        });
+      }),
+    );
+  }
+
+  function overrideMintInfo(nut29?: Record<string, unknown>) {
+    const nuts = { ...mintInfoResp.nuts, ...(nut29 !== undefined ? { 29: nut29 } : {}) };
+    server.use(
+      http.get(mintUrl + '/v1/info', () => {
+        return HttpResponse.json({ ...mintInfoResp, nuts });
+      }),
+    );
+  }
+
+  function makeQuotes(n: number): Array<{ amount: number; quote: { quote: string } }> {
+    return Array.from({ length: n }, (_, i) => ({
+      amount: 1,
+      quote: { quote: `quote-${i}` },
+    }));
+  }
+
+  test('throws when entries.length exceeds max_batch_size', async () => {
+    overrideMintInfo({ max_batch_size: 2 });
+    const wallet = new Wallet(mintUrl, { unit });
+    await wallet.loadMint();
+
+    await expect(wallet.prepareBatchMint('bolt11', makeQuotes(3))).rejects.toThrow(
+      /batch size 3.*limit of 2/,
+    );
+  });
+
+  test('does not throw when entries.length equals max_batch_size', async () => {
+    overrideMintInfo({ max_batch_size: 3 });
+    makeBatchHandler();
+    const wallet = new Wallet(mintUrl, { unit });
+    await wallet.loadMint();
+
+    const preview = await wallet.prepareBatchMint('bolt11', makeQuotes(3));
+    expect(preview.payload.quotes).toHaveLength(3);
+  });
+
+  test('does not throw when entries.length is below max_batch_size', async () => {
+    overrideMintInfo({ max_batch_size: 5 });
+    makeBatchHandler();
+    const wallet = new Wallet(mintUrl, { unit });
+    await wallet.loadMint();
+
+    const preview = await wallet.prepareBatchMint('bolt11', makeQuotes(2));
+    expect(preview.payload.quotes).toHaveLength(2);
+  });
+
+  test('does not throw when mint does not advertise NUT-29 info', async () => {
+    // Default mint info has no nuts['29'] key
+    makeBatchHandler();
+    const wallet = new Wallet(mintUrl, { unit });
+    await wallet.loadMint();
+
+    const preview = await wallet.prepareBatchMint('bolt11', makeQuotes(10));
+    expect(preview.payload.quotes).toHaveLength(10);
+  });
+
+  function mockLogger() {
+    return {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      log: vi.fn(),
+    };
+  }
+
+  test('logs a warning when method is not in advertised NUT-29 methods', async () => {
+    overrideMintInfo({ methods: ['bolt12'] });
+    const spyLogger = mockLogger();
+    const wallet = new Wallet(mintUrl, { unit, logger: spyLogger });
+    await wallet.loadMint();
+
+    await wallet.prepareBatchMint('bolt11', makeQuotes(1));
+    expect(spyLogger.warn).toHaveBeenCalledWith(expect.stringContaining("method 'bolt11'"));
+  });
+
+  test('does not warn when method IS in advertised NUT-29 methods', async () => {
+    overrideMintInfo({ methods: ['bolt11', 'bolt12'] });
+    const spyLogger = mockLogger();
+    const wallet = new Wallet(mintUrl, { unit, logger: spyLogger });
+    await wallet.loadMint();
+
+    await wallet.prepareBatchMint('bolt11', makeQuotes(1));
+    expect(spyLogger.warn).not.toHaveBeenCalled();
+  });
+
+  test('does not warn when nuts["29"].methods is absent', async () => {
+    overrideMintInfo({ max_batch_size: 10 });
+    const spyLogger = mockLogger();
+    const wallet = new Wallet(mintUrl, { unit, logger: spyLogger });
+    await wallet.loadMint();
+
+    await wallet.prepareBatchMint('bolt11', makeQuotes(2));
+    expect(spyLogger.warn).not.toHaveBeenCalled();
+  });
+
+  test('throws when entries exceed ABSOLUTE_MAX_BATCH_SIZE even without NUT-29 info', async () => {
+    // Default mint info has no nuts['29'] key — absolute cap still applies
+    const wallet = new Wallet(mintUrl, { unit });
+    await wallet.loadMint();
+
+    await expect(wallet.prepareBatchMint('bolt11', makeQuotes(101))).rejects.toThrow(
+      /batch size 101.*internal cap.*100/,
+    );
+  });
+
+  test('throws when entries exceed ABSOLUTE_MAX_BATCH_SIZE even with higher mint limit', async () => {
+    // Mint advertises 500, but normalizeNut29 clamps to 100.
+    // Belt-and-suspenders: even if clamping were skipped, the wallet enforces the cap.
+    overrideMintInfo({ max_batch_size: 500 });
+    const wallet = new Wallet(mintUrl, { unit });
+    await wallet.loadMint();
+
+    await expect(wallet.prepareBatchMint('bolt11', makeQuotes(101))).rejects.toThrow(
+      /batch size 101.*limit of 100/,
+    );
   });
 });
 

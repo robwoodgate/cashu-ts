@@ -50,6 +50,7 @@ import {
   sanitizeUrl,
   splitAmount,
   sumProofs,
+  ABSOLUTE_MAX_BATCH_SIZE,
 } from '../utils';
 
 import { getKeepAmounts } from './_internal';
@@ -285,7 +286,7 @@ class Wallet {
     if (!this._mintInfo || forceRefresh) {
       promises.push(
         this.mint.getInfo().then((info) => {
-          this._mintInfo = new MintInfo(info);
+          this._mintInfo = new MintInfo(info, this._logger);
           this.mint.setMintInfo(this._mintInfo);
           return null;
         }),
@@ -309,7 +310,7 @@ class Wallet {
    * The `cache` argument should usually come from `wallet.keyChain.cache`.
    */
   loadMintFromCache(mintInfo: GetInfoResponse, cache: KeyChainCache): void {
-    this._mintInfo = new MintInfo(mintInfo);
+    this._mintInfo = new MintInfo(mintInfo, this._logger);
     this.mint.setMintInfo(this._mintInfo);
     this._keyChain.loadFromCache(cache);
     this.finishInit();
@@ -2003,6 +2004,32 @@ class Wallet {
     outputType?: OutputType,
   ): Promise<BatchMintPreview<TQuote>> {
     this.failIf(entries.length === 0, 'prepareBatchMint: no entries provided');
+
+    // Enforce NUT-29 batch-size limit advertised by the mint, clamped to our absolute cap.
+    // If the mint does not advertise NUT-29 info, the absolute cap still applies.
+    const nut29 = this._mintInfo?.isSupported(29);
+    const nut29Params = nut29?.supported ? nut29.params : undefined;
+
+    const effectiveLimit = nut29Params?.max_batch_size ?? ABSOLUTE_MAX_BATCH_SIZE;
+
+    if (entries.length > effectiveLimit) {
+      const limitSource =
+        nut29Params?.max_batch_size != null ? `mint's advertised limit` : `cashu-ts internal cap`;
+      this.failIf(
+        true,
+        `prepareBatchMint: batch size ${entries.length} exceeds ` +
+          `${limitSource} of ${effectiveLimit}`,
+      );
+    }
+
+    // Warn if the requested method is not in the mint's NUT-29 supported methods
+    if (nut29Params?.methods?.length) {
+      if (!nut29Params.methods.includes(method)) {
+        this._logger.warn(
+          `prepareBatchMint: method '${method}' is not in mint's advertised NUT-29 methods`,
+        );
+      }
+    }
 
     const { privkey, keysetId, proofsWeHave, onCountersReserved } = config ?? {};
 

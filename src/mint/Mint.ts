@@ -162,7 +162,7 @@ class Mint {
       return this._mintInfo;
     }
     const data = await this.getInfo(customRequest);
-    this._mintInfo = new MintInfo(data);
+    this._mintInfo = new MintInfo(data, this._logger);
     return this._mintInfo;
   }
 
@@ -170,7 +170,7 @@ class Mint {
    * Seeds the mint-info cache from already-fetched data.
    */
   setMintInfo(mintInfo: MintInfo | GetInfoResponse): void {
-    this._mintInfo = mintInfo instanceof MintInfo ? mintInfo : new MintInfo(mintInfo);
+    this._mintInfo = mintInfo instanceof MintInfo ? mintInfo : new MintInfo(mintInfo, this._logger);
   }
 
   // -----------------------------------------------------------------
