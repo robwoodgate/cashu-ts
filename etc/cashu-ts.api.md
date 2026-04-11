@@ -47,7 +47,7 @@ export class Amount {
     // (undocumented)
     static sum(values: Iterable<AmountLike>): Amount;
     toBigInt(): bigint;
-    toJSON(): number | string;
+    toJSON(): string;
     toNumber(): number;
     toNumberUnsafe(): number;
     toString(): string;
@@ -60,7 +60,7 @@ export class AmountError extends Error {
     constructor(message: string);
 }
 
-// @public (undocumented)
+// @public
 export type AmountLike = number | bigint | string | Amount;
 
 // @public
@@ -644,7 +644,7 @@ export const meetsSignerThreshold: (signatures: string[], message: string, pubke
 
 // @public
 export class MeltBuilder<TQuote extends Pick<MeltQuoteBaseResponse, 'amount' | 'quote'> = MeltQuoteBolt11Response> {
-    constructor(wallet: Wallet, method: string, quote: TQuote, proofs: Proof[]);
+    constructor(wallet: Wallet, method: string, quote: TQuote, proofs: ProofLike[]);
     asCustom(data: OutputDataLike[]): this;
     asDeterministic(counter?: number, denoms?: AmountLike[]): this;
     asFactory(factory: OutputDataFactory, denoms?: AmountLike[]): this;
@@ -828,7 +828,7 @@ export class MintBuilder<M extends MintMethod, HasPrivKey extends boolean = M ex
     onCountersReserved(cb: OnCountersReserved): this;
     prepare(this: MintBuilder<M, true>): Promise<M extends 'bolt11' ? MintPreview<MintQuoteBolt11Response> : MintPreview<MintQuoteBolt12Response>>;
     privkey(k: string): MintBuilder<M, true>;
-    proofsWeHave(p: Array<Pick<Proof, 'amount'>>): this;
+    proofsWeHave(p: Array<Pick<ProofLike, 'amount'>>): this;
     run(this: MintBuilder<M, true>): Promise<Proof[]>;
 }
 
@@ -1004,7 +1004,7 @@ export interface MintPreview<TQuote extends Pick<MintQuoteBaseResponse, 'quote'>
 export type MintProofsConfig = {
     keysetId?: string;
     privkey?: string | string[];
-    proofsWeHave?: Array<Pick<Proof, 'amount'>>;
+    proofsWeHave?: Array<Pick<ProofLike, 'amount'>>;
     onCountersReserved?: OnCountersReserved;
 };
 
@@ -1408,7 +1408,7 @@ export type PrivKey = Uint8Array | string;
 // @public
 export type Proof = {
     id: string;
-    amount: bigint;
+    amount: Amount;
     secret: string;
     C: string;
     dleq?: SerializedDLEQ;
@@ -1475,7 +1475,7 @@ export type RawTransport = {
 
 // @public
 export class ReceiveBuilder {
-    constructor(wallet: Wallet, token: Token | string | Proof[]);
+    constructor(wallet: Wallet, token: Token | string | ProofLike[]);
     asCustom(data: OutputDataLike[]): this;
     asDeterministic(counter?: number, denoms?: AmountLike[]): this;
     asFactory(factory: OutputDataFactory, denoms?: AmountLike[]): this;
@@ -1485,7 +1485,7 @@ export class ReceiveBuilder {
     onCountersReserved(cb: OnCountersReserved): this;
     prepare(): Promise<SwapPreview>;
     privkey(k: string | string[]): this;
-    proofsWeHave(p: Array<Pick<Proof, 'amount'>>): this;
+    proofsWeHave(p: Array<Pick<ProofLike, 'amount'>>): this;
     requireDleq(on?: boolean): this;
     run(): Promise<Proof[]>;
 }
@@ -1495,7 +1495,7 @@ export type ReceiveConfig = {
     keysetId?: string;
     privkey?: string | string[];
     requireDleq?: boolean;
-    proofsWeHave?: Array<Pick<Proof, 'amount'>>;
+    proofsWeHave?: Array<Pick<ProofLike, 'amount'>>;
     onCountersReserved?: OnCountersReserved;
 };
 
@@ -1563,14 +1563,14 @@ export type SecretKind = 'P2PK' | 'HTLC' | (string & {});
 export type SecretsPolicy = 'auto' | 'deterministic' | 'random';
 
 // @public (undocumented)
-export type SelectProofs = (proofs: Proof[], amountToSelect: AmountLike, keyChain: KeyChain, includeFees?: boolean, exactMatch?: boolean, logger?: Logger) => SendResponse;
+export type SelectProofs = (proofs: ProofLike[], amountToSelect: AmountLike, keyChain: KeyChain, includeFees?: boolean, exactMatch?: boolean, logger?: Logger) => SendResponse;
 
 // @public (undocumented)
-export function selectProofsRGLI(proofs: Proof[], amountToSelect: AmountLike, keyChain: KeyChain, includeFees?: boolean, exactMatch?: boolean, _logger?: Logger): SendResponse;
+export function selectProofsRGLI(proofs: ProofLike[], amountToSelect: AmountLike, keyChain: KeyChain, includeFees?: boolean, exactMatch?: boolean, _logger?: Logger): SendResponse;
 
 // @public
 export class SendBuilder {
-    constructor(wallet: Wallet, amount: AmountLike, proofs: Proof[]);
+    constructor(wallet: Wallet, amount: AmountLike, proofs: ProofLike[]);
     asCustom(data: OutputDataLike[]): this;
     asDeterministic(counter?: number, denoms?: AmountLike[]): this;
     asFactory(factory: OutputDataFactory, denoms?: AmountLike[]): this;
@@ -1588,7 +1588,7 @@ export class SendBuilder {
     onCountersReserved(cb: OnCountersReserved): this;
     prepare(): Promise<SwapPreview>;
     privkey(k: string | string[]): this;
-    proofsWeHave(p: Array<Pick<Proof, 'amount'>>): this;
+    proofsWeHave(p: Array<Pick<ProofLike, 'amount'>>): this;
     run(): Promise<SendResponse>;
 }
 
@@ -1597,7 +1597,7 @@ export type SendConfig = {
     keysetId?: string;
     privkey?: string | string[];
     includeFees?: boolean;
-    proofsWeHave?: Array<Pick<Proof, 'amount'>>;
+    proofsWeHave?: Array<Pick<ProofLike, 'amount'>>;
     onCountersReserved?: OnCountersReserved;
 };
 
@@ -1620,7 +1620,7 @@ export type SendResponse = {
 
 // @public
 export type SerializedBlindedMessage = {
-    amount: bigint;
+    amount: Amount;
     B_: string;
     id: string;
 };
@@ -1735,7 +1735,7 @@ export type SubscribeOpts = {
 export type SubscriptionCanceller = () => void;
 
 // @public
-export function sumProofs(proofs: Array<Pick<Proof, 'amount'>>): Amount;
+export function sumProofs(proofs: Array<Pick<ProofLike, 'amount'>>): Amount;
 
 // @public
 export type SwapMethod = {
@@ -1752,8 +1752,8 @@ export type SwapMethod = {
 
 // @public
 export type SwapPreview = {
-    amount: AmountLike;
-    fees: AmountLike;
+    amount: Amount;
+    fees: Amount;
     keysetId: string;
     inputs: Proof[];
     sendOutputs?: OutputDataLike[];
@@ -1909,9 +1909,9 @@ export class Wallet {
     loadMintFromCache(mintInfo: GetInfoResponse, cache: KeyChainCache): void;
     // (undocumented)
     get logger(): Logger;
-    meltProofs<TQuote extends Pick<MeltQuoteBaseResponse, 'amount' | 'quote'>>(method: string, meltQuote: TQuote, proofsToSend: Proof[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltProofsResponse<TQuote>>;
-    meltProofsBolt11(meltQuote: MeltQuoteBolt11Response, proofsToSend: Proof[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltProofsResponse<MeltQuoteBolt11Response>>;
-    meltProofsBolt12(meltQuote: MeltQuoteBolt12Response, proofsToSend: Proof[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltProofsResponse<MeltQuoteBolt12Response>>;
+    meltProofs<TQuote extends Pick<MeltQuoteBaseResponse, 'amount' | 'quote'>>(method: string, meltQuote: TQuote, proofsToSend: ProofLike[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltProofsResponse<TQuote>>;
+    meltProofsBolt11(meltQuote: MeltQuoteBolt11Response, proofsToSend: ProofLike[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltProofsResponse<MeltQuoteBolt11Response>>;
+    meltProofsBolt12(meltQuote: MeltQuoteBolt12Response, proofsToSend: ProofLike[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltProofsResponse<MeltQuoteBolt12Response>>;
     readonly mint: Mint;
     mintProofs<TQuote extends Pick<MintQuoteBaseResponse, 'quote'>>(method: string, amount: AmountLike, quote: TQuote, config?: MintProofsConfig, outputType?: OutputType): Promise<Proof[]>;
     mintProofsBolt11(amount: AmountLike, quote: string | MintQuoteBolt11Response, config?: MintProofsConfig, outputType?: OutputType): Promise<Proof[]>;
@@ -1924,19 +1924,19 @@ export class Wallet {
         amount: AmountLike;
         quote: TQuote;
     }>, config?: MintProofsConfig, outputType?: OutputType): Promise<BatchMintPreview<TQuote>>;
-    prepareMelt<TQuote extends Pick<MeltQuoteBaseResponse, 'amount' | 'quote'>>(method: string, meltQuote: TQuote, proofsToSend: Proof[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltPreview<TQuote>>;
+    prepareMelt<TQuote extends Pick<MeltQuoteBaseResponse, 'amount' | 'quote'>>(method: string, meltQuote: TQuote, proofsToSend: ProofLike[], config?: MeltProofsConfig, outputType?: OutputType): Promise<MeltPreview<TQuote>>;
     prepareMint<TQuote extends Pick<MintQuoteBaseResponse, 'quote'>>(method: string, amount: AmountLike, quote: TQuote, config?: MintProofsConfig, outputType?: OutputType): Promise<MintPreview<TQuote>>;
-    prepareSwapToReceive(token: Token | string | Proof[], config?: ReceiveConfig, outputType?: OutputType): Promise<SwapPreview>;
-    prepareSwapToSend(amount: AmountLike, proofs: Proof[], config?: SendConfig, outputConfig?: OutputConfig): Promise<SwapPreview>;
-    receive(token: Token | string | Proof[], config?: ReceiveConfig, outputType?: OutputType): Promise<Proof[]>;
+    prepareSwapToReceive(token: Token | string | ProofLike[], config?: ReceiveConfig, outputType?: OutputType): Promise<SwapPreview>;
+    prepareSwapToSend(amount: AmountLike, proofs: ProofLike[], config?: SendConfig, outputConfig?: OutputConfig): Promise<SwapPreview>;
+    receive(token: Token | string | ProofLike[], config?: ReceiveConfig, outputType?: OutputType): Promise<Proof[]>;
     restore(start: number, count: number, config?: RestoreConfig): Promise<{
         proofs: Proof[];
         lastCounterWithSignature?: number;
     }>;
     selectProofsToSend(proofs: Proof[], amountToSend: AmountLike, includeFees?: boolean, exactMatch?: boolean): SendResponse;
-    send(amount: AmountLike, proofs: Proof[], config?: SendConfig, outputConfig?: OutputConfig): Promise<SendResponse>;
-    sendOffline(amount: AmountLike, proofs: Proof[], config?: SendOfflineConfig): SendResponse;
-    signP2PKProofs(proofs: Proof[], privkey: string | string[], outputData?: OutputDataLike[], quoteId?: string): Proof[];
+    send(amount: AmountLike, proofs: ProofLike[], config?: SendConfig, outputConfig?: OutputConfig): Promise<SendResponse>;
+    sendOffline(amount: AmountLike, proofs: ProofLike[], config?: SendOfflineConfig): SendResponse;
+    signP2PKProofs(proofs: ProofLike[], privkey: string | string[], outputData?: OutputDataLike[], quoteId?: string): Proof[];
     get unit(): string;
     withKeyset(id: string, opts?: {
         counterSource?: CounterSource;
@@ -1995,17 +1995,17 @@ export class WalletEvents {
 export class WalletOps {
     constructor(wallet: Wallet);
     // (undocumented)
-    meltBolt11(quote: MeltQuoteBolt11Response, proofs: Proof[]): MeltBuilder<MeltQuoteBolt11Response>;
+    meltBolt11(quote: MeltQuoteBolt11Response, proofs: ProofLike[]): MeltBuilder<MeltQuoteBolt11Response>;
     // (undocumented)
-    meltBolt12(quote: MeltQuoteBolt12Response, proofs: Proof[]): MeltBuilder<MeltQuoteBolt11Response>;
+    meltBolt12(quote: MeltQuoteBolt12Response, proofs: ProofLike[]): MeltBuilder<MeltQuoteBolt11Response>;
     // (undocumented)
     mintBolt11(amount: AmountLike, quote: MintQuoteFor<'bolt11'>): MintBuilder<"bolt11", true>;
     // (undocumented)
     mintBolt12(amount: AmountLike, quote: MintQuoteFor<'bolt12'>): MintBuilder<"bolt12", false>;
     // (undocumented)
-    receive(token: Token | string | Proof[]): ReceiveBuilder;
+    receive(token: Token | string | ProofLike[]): ReceiveBuilder;
     // (undocumented)
-    send(amount: AmountLike, proofs: Proof[]): SendBuilder;
+    send(amount: AmountLike, proofs: ProofLike[]): SendBuilder;
 }
 
 // @public

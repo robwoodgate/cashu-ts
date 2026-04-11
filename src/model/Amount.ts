@@ -5,6 +5,9 @@ export class AmountError extends Error {
   }
 }
 
+/**
+ * All types that can be converted to an {@link Amount} value object.
+ */
 export type AmountLike = number | bigint | string | Amount;
 
 /**
@@ -35,8 +38,8 @@ export class Amount {
   /**
    * Parse/normalize supported inputs into an Amount.
    *
-   * @throws If input is negative, or `number` type input is above safe limit, or input is not a
-   *   finite integer.
+   * @throws If input is negative, or if a `number` input exceeds the safe integer limit, or if
+   *   input is not a finite integer.
    */
   static from(input: AmountLike): Amount {
     if (input instanceof Amount) return input;
@@ -124,10 +127,10 @@ export class Amount {
   }
 
   /**
-   * Returns number if a safe integer, string if not.
+   * Used by JSON.stringify() to convert Amount to string.
    */
-  toJSON(): number | string {
-    return this.isSafeNumber() ? Number(this.value) : this.toString();
+  toJSON(): string {
+    return this.toString();
   }
 
   // -----------------------------------------------------------------

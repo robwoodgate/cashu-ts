@@ -4,6 +4,7 @@ import { test, describe, expect, vi } from 'vitest';
 import {
   Wallet,
   type Proof,
+  type ProofLike,
   type MeltQuoteBolt11Response,
   MeltQuoteState,
   OutputData,
@@ -62,13 +63,13 @@ describe('melt proofs', () => {
     const proofsToSend: Proof[] = [
       {
         id: '00bd033559de27d0',
-        amount: 8n,
+        amount: Amount.from(8),
         secret: 'secret1',
         C: 'C1',
       },
       {
         id: '00bd033559de27d0',
-        amount: 5n,
+        amount: Amount.from(5),
         secret: 'secret2',
         C: 'C2',
       },
@@ -78,8 +79,8 @@ describe('melt proofs', () => {
     expect(response.quote.state).toBe(MeltQuoteState.PAID);
     expect(response.quote.payment_preimage).toBe('preimage');
     expect(response.change).toHaveLength(2);
-    expect(response.change[0]).toMatchObject({ amount: 1n, id: '00bd033559de27d0' });
-    expect(response.change[1]).toMatchObject({ amount: 2n, id: '00bd033559de27d0' });
+    expect(response.change[0]).toMatchObject({ amount: Amount.from(1), id: '00bd033559de27d0' });
+    expect(response.change[1]).toMatchObject({ amount: Amount.from(2), id: '00bd033559de27d0' });
     expect(/[0-9a-f]{64}/.test(response.change[0].C)).toBe(true);
     expect(/[0-9a-f]{64}/.test(response.change[0].secret)).toBe(true);
   });
@@ -116,13 +117,13 @@ describe('melt proofs', () => {
     const proofsToSend: Proof[] = [
       {
         id: '00bd033559de27d0',
-        amount: 8n,
+        amount: Amount.from(8),
         secret: 'secret1',
         C: 'C1',
       },
       {
         id: '00bd033559de27d0',
-        amount: 4n,
+        amount: Amount.from(4),
         secret: 'secret2',
         C: 'C2',
       },
@@ -131,6 +132,57 @@ describe('melt proofs', () => {
 
     expect(response.quote.state).toBe(MeltQuoteState.PAID);
     expect(response.quote.payment_preimage).toBe('preimage');
+    expect(response.change).toHaveLength(0);
+  });
+
+  test('test melt proofs accepts deserialized ProofLike[] input', async () => {
+    server.use(
+      http.post(mintUrl + '/v1/melt/bolt11', () => {
+        return HttpResponse.json({
+          quote: 'test_melt_quote',
+          amount: 12,
+          unit: 'sat',
+          fee_reserve: 0,
+          state: MeltQuoteState.PAID,
+          expiry: 1234567890,
+          payment_preimage: 'preimage',
+          request: 'bolt11request',
+          change: [],
+        });
+      }),
+    );
+    const wallet = new Wallet(mint, { unit });
+    await wallet.loadMint();
+
+    const meltQuote: MeltQuoteBolt11Response = {
+      quote: 'test_melt_quote',
+      amount: Amount.from(12),
+      fee_reserve: Amount.from(0),
+      request: 'bolt11request',
+      state: MeltQuoteState.UNPAID,
+      expiry: 1234567890,
+      payment_preimage: null,
+      unit: 'sat',
+    };
+    const storedProofs = JSON.parse(
+      JSON.stringify([
+        {
+          id: '00bd033559de27d0',
+          amount: Amount.from(8),
+          secret: 'secret1',
+          C: 'C1',
+        },
+        {
+          id: '00bd033559de27d0',
+          amount: Amount.from(4),
+          secret: 'secret2',
+          C: 'C2',
+        },
+      ]),
+    ) as ProofLike[];
+
+    const response = await wallet.meltProofsBolt11(meltQuote, storedProofs);
+    expect(response.quote.state).toBe(MeltQuoteState.PAID);
     expect(response.change).toHaveLength(0);
   });
 
@@ -166,13 +218,13 @@ describe('melt proofs', () => {
     const proofsToSend: Proof[] = [
       {
         id: '00bd033559de27d0',
-        amount: 8n,
+        amount: Amount.from(8),
         secret: 'secret1',
         C: 'C1',
       },
       {
         id: '00bd033559de27d0',
-        amount: 5n,
+        amount: Amount.from(5),
         secret: 'secret2',
         C: 'C2',
       },
@@ -190,7 +242,7 @@ describe('melt proofs', () => {
     const data: OutputData[] = [
       new OutputData(
         {
-          amount: 0n,
+          amount: Amount.zero(),
           B_: '0280999e99569db86fff252e9fe235d5ab0583c5e48e9a6d30b7159ddb2354a664',
           id: '00bd033559de27d0',
         },
@@ -204,7 +256,7 @@ describe('melt proofs', () => {
       ),
       new OutputData(
         {
-          amount: 0n,
+          amount: Amount.zero(),
           B_: '0366a12d8f642a9209b2a2b62dd46133d67c61395758760b037526d8ea6ebb0b58',
           id: '00bd033559de27d0',
         },
@@ -236,13 +288,13 @@ describe('melt proofs', () => {
     const proofsToSend: Proof[] = [
       {
         id: '00bd033559de27d0',
-        amount: 8n,
+        amount: Amount.from(8),
         secret: 'secret1',
         C: 'C1',
       },
       {
         id: '00bd033559de27d0',
-        amount: 5n,
+        amount: Amount.from(5),
         secret: 'secret2',
         C: 'C2',
       },
@@ -279,13 +331,13 @@ describe('melt proofs', () => {
       const proofsToSend: Proof[] = [
         {
           id: '00bd033559de27d0',
-          amount: 8n,
+          amount: Amount.from(8),
           secret: 'secret1',
           C: 'C1',
         },
         {
           id: '00bd033559de27d0',
-          amount: 5n,
+          amount: Amount.from(5),
           secret: 'secret2',
           C: 'C2',
         },
@@ -346,13 +398,13 @@ describe('melt proofs', () => {
       const proofsToSend: Proof[] = [
         {
           id: '00bd033559de27d0',
-          amount: 8n,
+          amount: Amount.from(8),
           secret: 'secret1',
           C: 'C1',
         },
         {
           id: '00bd033559de27d0',
-          amount: 5n,
+          amount: Amount.from(5),
           secret: 'secret2',
           C: 'C2',
         },
@@ -396,7 +448,7 @@ describe('melt proofs', () => {
       // response sanity (v3 contract)
       expect(res.quote.state).toBe(MeltQuoteState.PAID);
       expect(res.change).toHaveLength(2);
-      expect(res.change[0]).toMatchObject({ amount: 1n, id: '00bd033559de27d0' });
+      expect(res.change[0]).toMatchObject({ amount: Amount.from(1), id: '00bd033559de27d0' });
     });
   });
 
@@ -443,13 +495,13 @@ describe('melt proofs', () => {
     const proofsToSend: Proof[] = [
       {
         id: '00bd033559de27d0',
-        amount: 8n,
+        amount: Amount.from(8),
         secret: 'secret1',
         C: 'C1',
       },
       {
         id: '00bd033559de27d0',
-        amount: 5n,
+        amount: Amount.from(5),
         secret: 'secret2',
         C: 'C2',
       },
@@ -459,7 +511,7 @@ describe('melt proofs', () => {
     expect(response.quote.state).toBe(MeltQuoteState.PAID);
     expect(response.quote.payment_preimage).toBe('preimage');
     expect(response.change).toHaveLength(2);
-    expect(response.change[0]).toMatchObject({ amount: 1n, id: '00bd033559de27d0' });
+    expect(response.change[0]).toMatchObject({ amount: Amount.from(1), id: '00bd033559de27d0' });
   });
 
   test('mint.meltBolt11 rejects response missing state', async () => {
@@ -531,13 +583,13 @@ describe('melt proofs', () => {
     const proofsToSend: Proof[] = [
       {
         id: '00bd033559de27d0',
-        amount: 8n,
+        amount: Amount.from(8),
         secret: 'secret1',
         C: 'C1',
       },
       {
         id: '00bd033559de27d0',
-        amount: 4n,
+        amount: Amount.from(4),
         secret: 'secret2',
         C: 'C2',
       },
@@ -561,7 +613,7 @@ describe('async melt preference body', () => {
     const proofs = [
       {
         id: '00bd033559de27d0',
-        amount: 1n,
+        amount: Amount.from(1),
         secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
         C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be',
       },
@@ -606,7 +658,7 @@ describe('async melt preference body', () => {
     const proofs = [
       {
         id: '00bd033559de27d0',
-        amount: 1n,
+        amount: Amount.from(1),
         secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
         C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be',
       },
@@ -693,7 +745,7 @@ describe('async melt preference body', () => {
     const proofs = [
       {
         id: '00bd033559de27d0',
-        amount: 1n,
+        amount: Amount.from(1),
         secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
         C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be',
       },
@@ -754,7 +806,7 @@ describe('async melt preference body', () => {
     const proofs = [
       {
         id: '00bd033559de27d0',
-        amount: 1n,
+        amount: Amount.from(1),
         secret: '1f98e6837a434644c9411825d7c6d6e13974b931f8f0652217cea29010674a13',
         C: '034268c0bd30b945adf578aca2dc0d1e26ef089869aaf9a08ba3a6da40fda1d8be',
       },

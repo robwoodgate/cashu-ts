@@ -1,16 +1,23 @@
 import { test, describe, expect } from 'vitest';
 import { SigAll, SigAllSigningPackage, MeltQuoteState, Amount } from '../../src';
-import type { OutputDataLike, Proof, P2PKWitness, SerializedBlindedMessage } from '../../src';
+import type {
+  OutputDataLike,
+  Proof,
+  P2PKWitness,
+  SerializedBlindedMessage,
+  MeltPreview,
+  SwapPreview,
+} from '../../src';
 
 const dummyProof: Proof = {
   id: 'testid',
-  amount: 32n,
+  amount: Amount.from(32),
   secret: 'dummysecret',
   C: '02' + '1'.repeat(64),
 };
 
 const dummyBlindedMessage: SerializedBlindedMessage = {
-  amount: 32n,
+  amount: Amount.from(32),
   id: 'bm1',
   B_: 'dummyB',
 };
@@ -34,7 +41,7 @@ function makeSwapPreview() {
     keysetIdts: [],
     method: 'swap',
     keysetId: 'dummy-keyset-id',
-  };
+  } as SwapPreview;
 }
 
 function makeMeltPreview() {
@@ -43,17 +50,17 @@ function makeMeltPreview() {
     outputData: [dummyOutput],
     quote: {
       quote: 'dummyquote',
-      amount: 32,
+      amount: Amount.from(32),
       unit: 'sat',
       state: MeltQuoteState.PENDING,
       expiry: Date.now() + 10000,
     },
-    amount: 32,
+    amount: Amount.from(32),
     fees: 0,
     keysetIdts: [],
     method: 'melt',
     keysetId: 'dummy-keyset-id',
-  };
+  } as MeltPreview;
 }
 
 // Helper: encode an arbitrary object as a sigallA-prefixed string,
@@ -62,6 +69,13 @@ function encodeRaw(obj: unknown): string {
   const json = JSON.stringify(obj);
   const b64 = btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return `sigallA${b64}`;
+}
+
+function decodeRawJson(input: string): string {
+  const base64url = input.slice('sigallA'.length);
+  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  return atob(padded);
 }
 
 describe('SigAll — computeDigests', () => {
@@ -166,7 +180,7 @@ describe('SigAll — serializePackage / deserializePackage', () => {
   });
 
   test('round-trip preserves large (unsafe integer) output amounts', () => {
-    const largeAmount = 9007199254740993n; // > MAX_SAFE_INTEGER
+    const largeAmount = Amount.from(9007199254740993n); // > MAX_SAFE_INTEGER
     const largeBm: SerializedBlindedMessage = { amount: largeAmount, id: 'bm-large', B_: 'dummyB' };
     const pkg: SigAllSigningPackage = {
       version: 'sigallA',
@@ -176,7 +190,40 @@ describe('SigAll — serializePackage / deserializePackage', () => {
       digests: SigAll.computeDigests([dummyProof], [largeBm]),
     };
     const parsed = SigAll.deserializePackage(SigAll.serializePackage(pkg));
-    expect(parsed.outputs[0].amount).toBe(largeAmount);
+    expect(parsed.outputs[0].amount.equals(largeAmount)).toBeTruthy();
+  });
+
+  test('deserializePackage accepts numeric output amounts', () => {
+    const parsed = SigAll.deserializePackage(
+      encodeRaw({
+        version: 'sigallA',
+        type: 'swap',
+        inputs: [{ secret: 'testsecret', C: '02' + '1'.repeat(64) }],
+        outputs: [{ amount: 32, id: 'bm1', B_: 'dummyB' }],
+        digests: SigAll.computeDigests(
+          [dummyProof],
+          [{ amount: Amount.from(32), id: 'bm1', B_: 'dummyB' }],
+        ),
+      }),
+    );
+
+    expect(parsed.outputs[0].amount.equals(Amount.from(32))).toBeTruthy();
+  });
+
+  test('serializePackage emits unquoted integer amounts', () => {
+    const largeAmount = Amount.from(9007199254740993n);
+    const largeBm: SerializedBlindedMessage = { amount: largeAmount, id: 'bm-large', B_: 'dummyB' };
+    const pkg: SigAllSigningPackage = {
+      version: 'sigallA',
+      type: 'swap',
+      inputs: [{ secret: 'testsecret', C: '02' + '1'.repeat(64) }],
+      outputs: [largeBm],
+      digests: SigAll.computeDigests([dummyProof], [largeBm]),
+    };
+
+    const json = decodeRawJson(SigAll.serializePackage(pkg));
+    expect(json).toContain('"amount":9007199254740993');
+    expect(json).not.toContain('"amount":"9007199254740993"');
   });
 
   test('serialization is deterministic', () => {
@@ -199,6 +246,11 @@ describe('SigAll — serializePackage / deserializePackage', () => {
   test('throws on non-object JSON', () => {
     const encoded = 'sigallA' + btoa('"just a string"').replace(/=+$/, '');
     expect(() => SigAll.deserializePackage(encoded)).toThrow('must be a JSON object');
+  });
+
+  test('throws on invalid JSON', () => {
+    const encoded = 'sigallA' + btoa('{not valid json}').replace(/=+$/, '');
+    expect(() => SigAll.deserializePackage(encoded)).toThrow('Failed to parse signing package');
   });
 
   test('throws on invalid version', () => {
@@ -310,7 +362,7 @@ describe('SigAll — serializePackage / deserializePackage', () => {
           digests: { current: 'a'.repeat(64) },
         }),
       ),
-    ).toThrow('amount must be a number');
+    ).toThrow('amount must be a number or bigint');
   });
 
   test('throws on invalid output shape — missing B_', () => {

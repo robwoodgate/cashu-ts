@@ -1,14 +1,14 @@
-import { type AmountLike } from '../Amount';
+import { type Amount, type AmountLike } from '../Amount';
 
 import { type SerializedDLEQ } from './blinded';
 
 /**
- * A proof-shaped object whose `amount` field has not yet been normalized to `bigint`.
+ * A proof-shaped object whose `amount` field has not yet been normalized to `Amount`.
  *
  * Use this type to model proofs coming from external storage (localStorage, databases, JSON blobs)
  * where `amount` may be a `number`, `string`, or any other {@link AmountLike} value.
  *
- * @see {@link Proof} for the fully normalized type with `amount: bigint`.
+ * @see {@link Proof} for the fully normalized type with `amount: Amount`.
  */
 export type ProofLike = Omit<Proof, 'amount'> & { amount: AmountLike };
 
@@ -23,7 +23,7 @@ export type Proof = {
   /**
    * Amount denominated in unit of the mints keyset id.
    */
-  amount: bigint;
+  amount: Amount;
   /**
    * The initial secret that was (randomly) chosen for the creation of this proof.
    */

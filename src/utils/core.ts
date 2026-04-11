@@ -201,12 +201,14 @@ function convertToShortKeysetId(proofs: Proof[]) {
  * Encodes a {@link Token} as a cashu token string.
  */
 export function getEncodedToken(token: Token, opts?: { removeDleq?: boolean }): string {
-  if (hasNonHexId(token.proofs)) {
+  // Normalize amounts for untyped (JS) callers who may pass JSON.parse'd tokens directly.
+  const proofs = normalizeProofAmounts(token.proofs);
+  if (hasNonHexId(proofs)) {
     throw new Error(
       'Proofs contain a legacy keyset ID and cannot be encoded. Swap them at the mint first.',
     );
   }
-  return getEncodedTokenV4(token, opts?.removeDleq);
+  return getEncodedTokenV4({ ...token, proofs }, opts?.removeDleq);
 }
 
 /**
@@ -260,7 +262,7 @@ function templateFromToken(token: Token): TokenV4Template {
         i: hexToBytes(id),
         p: idMap[id].map(
           (p: Proof): V4ProofTemplate => ({
-            a: p.amount,
+            a: p.amount.toBigInt(),
             s: p.secret,
             c: hexToBytes(p.C),
             ...(p.dleq && {
@@ -294,7 +296,7 @@ function tokenFromTemplate(template: TokenV4Template): Token {
       proofs.push({
         secret: p.s,
         C: bytesToHex(p.c),
-        amount: Amount.from(p.a).toBigInt(),
+        amount: Amount.from(p.a),
         id: bytesToHex(t.i),
         ...(p.d && {
           dleq: {
@@ -374,7 +376,7 @@ function handleTokens(token: string): Token {
     const entry = parsedV3Token.token[0];
     const proofs = entry.proofs.map((p) => ({
       ...p,
-      amount: Amount.from(p.amount as AmountLike).toBigInt(),
+      amount: Amount.from(p.amount as AmountLike),
     }));
     const tokenObj: Token = {
       mint: entry.mint,
@@ -514,7 +516,7 @@ export function sanitizeUrl(url: string): string {
 /**
  * Sums the `amount` field of the given proofs.
  */
-export function sumProofs(proofs: Array<Pick<Proof, 'amount'>>): Amount {
+export function sumProofs(proofs: Array<Pick<ProofLike, 'amount'>>): Amount {
   return Amount.sum(proofs.map((proof) => proof.amount));
 }
 
@@ -527,7 +529,7 @@ export function sumProofs(proofs: Array<Pick<Proof, 'amount'>>): Amount {
  *     const proofs = normalizeProofAmounts(db.query('SELECT * FROM proofs'));
  */
 export function normalizeProofAmounts(raw: ProofLike[]): Proof[] {
-  return raw.map((p) => ({ ...p, amount: Amount.from(p.amount).toBigInt() }));
+  return raw.map((p) => ({ ...p, amount: Amount.from(p.amount) }));
 }
 
 /**
@@ -664,7 +666,7 @@ export function hasValidDleq(proof: Proof, keyset: HasKeysetKeys): boolean {
     r: hexToNumber(proof.dleq.r ?? '00'),
   } as DLEQ;
   if (!hasCorrespondingKey(proof.amount, keyset.keys)) {
-    throw new Error(`Undefined key for amount ${proof.amount} in keyset ${keyset.id}`);
+    throw new Error(`Undefined key for amount ${proof.amount.toString()} in keyset ${keyset.id}`);
   }
   const key = keyset.keys[proof.amount.toString()];
   return verifyDLEQProof_reblind(
@@ -680,7 +682,9 @@ export function hasValidDleq(proof: Proof, keyset: HasKeysetKeys): boolean {
  */
 export function getEncodedTokenBinary(token: Token): Uint8Array {
   const utf8Encoder = new TextEncoder();
-  const template = templateFromToken(token);
+  // Normalize amounts for untyped (JS) callers who may pass JSON.parse'd tokens directly.
+  const proofs = normalizeProofAmounts(token.proofs);
+  const template = templateFromToken({ ...token, proofs });
   const binaryTemplate = encodeCBOR(template);
   const prefix = utf8Encoder.encode('craw');
   const version = utf8Encoder.encode('B');

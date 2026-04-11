@@ -8,7 +8,7 @@ import {
   type MintQuoteBolt12Response,
   type MintQuoteBolt11Response,
 } from '../model/types';
-import type { Proof } from '../model/types/proof';
+import type { ProofLike } from '../model/types/proof';
 import type { Token } from '../model/types/token';
 
 import {
@@ -40,10 +40,10 @@ export type MintQuoteFor<M extends MintMethod> = M extends 'bolt11'
  */
 export class WalletOps {
   constructor(private wallet: Wallet) {}
-  send(amount: AmountLike, proofs: Proof[]) {
+  send(amount: AmountLike, proofs: ProofLike[]) {
     return new SendBuilder(this.wallet, amount, proofs);
   }
-  receive(token: Token | string | Proof[]) {
+  receive(token: Token | string | ProofLike[]) {
     return new ReceiveBuilder(this.wallet, token);
   }
   /**
@@ -57,10 +57,10 @@ export class WalletOps {
   mintBolt12(amount: AmountLike, quote: MintQuoteFor<'bolt12'>) {
     return new MintBuilder<'bolt12'>(this.wallet, 'bolt12', amount, quote);
   }
-  meltBolt11(quote: MeltQuoteBolt11Response, proofs: Proof[]) {
+  meltBolt11(quote: MeltQuoteBolt11Response, proofs: ProofLike[]) {
     return new MeltBuilder<MeltQuoteBolt11Response>(this.wallet, 'bolt11', quote, proofs);
   }
-  meltBolt12(quote: MeltQuoteBolt12Response, proofs: Proof[]) {
+  meltBolt12(quote: MeltQuoteBolt12Response, proofs: ProofLike[]) {
     return new MeltBuilder<MeltQuoteBolt12Response>(this.wallet, 'bolt12', quote, proofs);
   }
 }
@@ -91,7 +91,7 @@ export class SendBuilder {
   constructor(
     private wallet: Wallet,
     amount: AmountLike,
-    private proofs: Proof[],
+    private proofs: ProofLike[],
   ) {
     this.amount = Amount.from(amount);
   }
@@ -240,7 +240,7 @@ export class SendBuilder {
    * Has no effect if denominations (custom split) was specified.
    * @param p Proofs currently held by the wallet, used to hit denomination targets.
    */
-  proofsWeHave(p: Array<Pick<Proof, 'amount'>>) {
+  proofsWeHave(p: Array<Pick<ProofLike, 'amount'>>) {
     this.config.proofsWeHave = p;
     return this;
   }
@@ -362,7 +362,7 @@ export class ReceiveBuilder {
 
   constructor(
     private wallet: Wallet,
-    private token: Token | string | Proof[],
+    private token: Token | string | ProofLike[],
   ) {}
 
   /**
@@ -463,7 +463,7 @@ export class ReceiveBuilder {
    * Has no effect if denominations (custom split) was specified.
    * @param p Proofs currently held by the wallet, used to hit denomination targets.
    */
-  proofsWeHave(p: Array<Pick<Proof, 'amount'>>) {
+  proofsWeHave(p: Array<Pick<ProofLike, 'amount'>>) {
     this.config.proofsWeHave = p;
     return this;
   }
@@ -628,7 +628,7 @@ export class MintBuilder<
    * Has no effect if denominations (custom split) was specified.
    * @param p Proofs currently held by the wallet, used to hit denomination targets.
    */
-  proofsWeHave(p: Array<Pick<Proof, 'amount'>>) {
+  proofsWeHave(p: Array<Pick<ProofLike, 'amount'>>) {
     this.config.proofsWeHave = p;
     return this;
   }
@@ -741,7 +741,7 @@ export class MeltBuilder<
     private wallet: Wallet,
     private method: string,
     private quote: TQuote,
-    private proofs: Proof[],
+    private proofs: ProofLike[],
   ) {}
 
   /**
