@@ -1192,7 +1192,7 @@ export interface OutputConfig {
 
 // @public (undocumented)
 export class OutputData implements OutputDataLike {
-    constructor(blindedMessage: SerializedBlindedMessage, blindingFactor: bigint, secret: Uint8Array);
+    constructor(blindedMessage: SerializedBlindedMessage, blindingFactor: bigint, secret: Uint8Array, ephemeralE?: string);
     // (undocumented)
     blindedMessage: SerializedBlindedMessage;
     // (undocumented)
@@ -1210,10 +1210,28 @@ export class OutputData implements OutputDataLike {
     // (undocumented)
     static createSingleRandomData(amount: AmountLike, keysetId: string): OutputData;
     // (undocumented)
+    ephemeralE?: string;
+    // (undocumented)
     secret: Uint8Array;
     static sumOutputAmounts(outputs: OutputDataLike[]): Amount;
     // (undocumented)
     toProof(sig: SerializedBlindedSignature, keyset: HasKeysetKeys): Proof;
+}
+
+// @public (undocumented)
+export interface OutputDataCreator {
+    // (undocumented)
+    createDeterministicData(amount: AmountLike, seed: Uint8Array, counter: number, keyset: HasKeysetKeys, customSplit?: AmountLike[]): OutputDataLike[];
+    // (undocumented)
+    createP2PKData(p2pk: P2PKOptions, amount: AmountLike, keyset: HasKeysetKeys, customSplit?: AmountLike[]): OutputDataLike[];
+    // (undocumented)
+    createRandomData(amount: AmountLike, keyset: HasKeysetKeys, customSplit?: AmountLike[]): OutputDataLike[];
+    // (undocumented)
+    createSingleDeterministicData(amount: AmountLike, seed: Uint8Array, counter: number, keysetId: string): OutputDataLike;
+    // (undocumented)
+    createSingleP2PKData(p2pk: P2PKOptions, amount: AmountLike, keysetId: string): OutputDataLike;
+    // (undocumented)
+    createSingleRandomData(amount: AmountLike, keysetId: string): OutputDataLike;
 }
 
 // @public
@@ -1225,6 +1243,8 @@ export interface OutputDataLike {
     blindedMessage: SerializedBlindedMessage;
     // (undocumented)
     blindingFactor: bigint;
+    // (undocumented)
+    ephemeralE?: string;
     // (undocumented)
     secret: Uint8Array;
     // (undocumented)
@@ -1854,6 +1874,7 @@ export class Wallet {
         counterInit?: Record<string, number>;
         denominationTarget?: number;
         selectProofs?: SelectProofs;
+        outputDataCreator?: OutputDataCreator;
         logger?: Logger;
     });
     batchRestore(gapLimit?: number, batchSize?: number, counter?: number, keysetId?: string): Promise<{
