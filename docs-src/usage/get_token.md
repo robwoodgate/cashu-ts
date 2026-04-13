@@ -13,7 +13,7 @@ try {
   const meta = getTokenMetadata(tokenString);
   console.log(meta.mint); // "https://mint.example.com"
   console.log(meta.unit); // "sat"
-  console.log(meta.amount.toNumber()); // e.g. 64  (amount is Amount, not number)
+  console.log(meta.amount); // e.g. 64
 } catch (_) {
   console.log('Invalid token');
 }
