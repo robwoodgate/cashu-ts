@@ -4,6 +4,7 @@ import { HttpResponse, http, delay } from 'msw';
 import { setupServer } from 'msw/node';
 import { setGlobalRequestOptions } from '../../src';
 import request, { setRequestLogger } from '../../src/transport';
+import { buildRequestHeaders, detectBrowserLike, errorMessage } from '../../src/transport/request';
 import { MINTCACHE } from '../consts';
 import { Nut19Policy } from '../../src';
 import { NULL_LOGGER, type Logger } from '../../src/logger';
@@ -127,6 +128,17 @@ describe('requests', () => {
     await expect(promise).rejects.toThrow('Minting is disabled');
   });
 
+  test('maps empty error response body to bad response', async () => {
+    server.use(
+      http.get(mintUrl + '/v1/melt/quote/bolt11/test', () => {
+        return new HttpResponse('', { status: 400 });
+      }),
+    );
+
+    const wallet = new Wallet(mintUrl);
+    wallet.loadMintFromCache(MINTCACHE.mintInfo, MINTCACHE.keychainCache);
+    await expect(wallet.checkMeltQuoteBolt11('test')).rejects.toThrow('bad response');
+  });
   describe('NUT-19 Cache retry logic', () => {
     afterEach(() => {
       vi.restoreAllMocks();
@@ -751,3 +763,87 @@ describe('requests', () => {
     });
   });
 }, 7500);
+
+describe('detectBrowserLike', () => {
+  test('true: browser main thread (window + document)', () => {
+    expect(detectBrowserLike({ window: { document: {} } })).toBe(true);
+  });
+
+  test('true: classic worker (self instanceof WorkerGlobalScope)', () => {
+    class WorkerGlobalScope {}
+    const self = new WorkerGlobalScope();
+    expect(detectBrowserLike({ self, WorkerGlobalScope })).toBe(true);
+  });
+
+  test('true: module worker (no importScripts, but WorkerGlobalScope present)', () => {
+    // Module workers omit importScripts; the WorkerGlobalScope check still catches them.
+    class WorkerGlobalScope {}
+    const self = new WorkerGlobalScope();
+    expect(detectBrowserLike({ self, WorkerGlobalScope })).toBe(true);
+  });
+
+  test('true: service worker (subclass of WorkerGlobalScope)', () => {
+    class WorkerGlobalScope {}
+    class ServiceWorkerGlobalScope extends WorkerGlobalScope {}
+    const self = new ServiceWorkerGlobalScope();
+    expect(detectBrowserLike({ self, WorkerGlobalScope })).toBe(true);
+  });
+
+  test('false: Node-like (no window, no WorkerGlobalScope)', () => {
+    expect(detectBrowserLike({})).toBe(false);
+  });
+
+  test('false: self present but WorkerGlobalScope undefined (RN/Bun shape)', () => {
+    expect(detectBrowserLike({ self: {} })).toBe(false);
+  });
+
+  test('false: window present but document undefined (partial polyfill)', () => {
+    expect(detectBrowserLike({ window: {} })).toBe(false);
+  });
+
+  test('false: WorkerGlobalScope present but self is not an instance of it', () => {
+    class WorkerGlobalScope {}
+    expect(detectBrowserLike({ self: {}, WorkerGlobalScope })).toBe(false);
+  });
+});
+
+describe('buildRequestHeaders', () => {
+  test('non-browser runtimes get the Mozilla/5.0 User-Agent override', () => {
+    expect(buildRequestHeaders(undefined, undefined, false)['User-Agent']).toBe('Mozilla/5.0');
+  });
+
+  test('browser-like runtimes omit the User-Agent override', () => {
+    expect(buildRequestHeaders(undefined, undefined, true)['User-Agent']).toBeUndefined();
+  });
+
+  test('caller-supplied User-Agent always wins', () => {
+    expect(buildRequestHeaders(undefined, { 'User-Agent': 'X' }, false)['User-Agent']).toBe('X');
+    expect(buildRequestHeaders(undefined, { 'User-Agent': 'X' }, true)['User-Agent']).toBe('X');
+  });
+
+  test('Content-Type is added only when body is present', () => {
+    expect(buildRequestHeaders('{"x":1}', undefined, false)['Content-Type']).toBe(
+      'application/json',
+    );
+    expect(buildRequestHeaders(undefined, undefined, false)['Content-Type']).toBeUndefined();
+  });
+
+  test('Accept is always present', () => {
+    expect(buildRequestHeaders(undefined, undefined, true).Accept).toBe(
+      'application/json, text/plain, */*',
+    );
+  });
+});
+
+describe('errorMessage', () => {
+  test('returns err.message when err is an Error', () => {
+    expect(errorMessage(new Error('boom'), 'fallback')).toBe('boom');
+  });
+
+  test('returns fallback when err is not an Error (string, null, undefined, plain object)', () => {
+    expect(errorMessage('not an error', 'fallback')).toBe('fallback');
+    expect(errorMessage(null, 'fallback')).toBe('fallback');
+    expect(errorMessage(undefined, 'fallback')).toBe('fallback');
+    expect(errorMessage({ message: 'looks like an error' }, 'fallback')).toBe('fallback');
+  });
+});

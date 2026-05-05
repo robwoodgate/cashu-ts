@@ -6,6 +6,70 @@ import { JSONInt } from '../utils/JSONInt';
 // Generic request function type so callers can do requestInstance<T>(...)
 export type RequestFn = <T = unknown>(args: RequestOptions) => Promise<T>;
 
+/**
+ * Subset of globalThis used by {@link detectBrowserLike}; loosened for unit tests.
+ *
+ * @internal
+ */
+export type GlobalLike = {
+  window?: { document?: unknown };
+  self?: unknown;
+  WorkerGlobalScope?: { new (): unknown };
+};
+
+/**
+ * True in browser main thread + any Worker scope (classic/module/shared/service via
+ * `WorkerGlobalScope`).
+ *
+ * @internal
+ */
+export function detectBrowserLike(g: GlobalLike): boolean {
+  if (g.window !== undefined && g.window.document !== undefined) return true;
+  return (
+    g.WorkerGlobalScope !== undefined &&
+    g.self !== undefined &&
+    g.self instanceof g.WorkerGlobalScope
+  );
+}
+
+const IS_BROWSER_LIKE = detectBrowserLike(globalThis);
+
+/**
+ * Builds the outgoing request headers.
+ *
+ * @remarks
+ * Overrides the default User-Agent in non-browser runtimes (Node, Deno, Bun, React Native) where
+ * native HTTP stacks otherwise leak fingerprintable identifiers (undici, NSURLSession, OkHttp).
+ * Skipped in browsers + workers because Firefox/WebKit can promote it to a CORS preflight even
+ * though the Fetch spec lists it as a forbidden header. Caller-supplied `requestHeaders` always
+ * wins.
+ * @internal
+ */
+export function buildRequestHeaders(
+  body: string | undefined,
+  requestHeaders: Record<string, string> | undefined,
+  isBrowserLike: boolean = IS_BROWSER_LIKE,
+): Record<string, string> {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    ...(body ? { 'Content-Type': 'application/json' } : undefined),
+    ...(isBrowserLike ? undefined : { 'User-Agent': 'Mozilla/5.0' }),
+    ...requestHeaders,
+  };
+}
+
+/**
+ * Returns `err.message` when `err` is an Error, otherwise `fallback`.
+ *
+ * @remarks
+ * Real fetch implementations always reject with an Error subclass, but `err` is typed `unknown`
+ * inside `catch`, so the fallback protects against pathological polyfills.
+ * @internal
+ */
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
 export type RequestArgs = {
   endpoint: string;
   requestBody?: Record<string, unknown>;
@@ -220,14 +284,7 @@ async function _request(options: RequestOptions): Promise<unknown> {
   void logger;
 
   const body = requestBody ? JSONInt.stringify(requestBody) : undefined;
-  const headers: Record<string, string> = {
-    Accept: 'application/json, text/plain, */*',
-    ...(body ? { 'Content-Type': 'application/json' } : undefined),
-    // Generic User-Agent to avoid fingerprinting. In browsers this is a forbidden header (silently ignored).
-    // In Node.js this overrides the default `undici` identifier that would leak the runtime.
-    'User-Agent': 'Mozilla/5.0',
-    ...requestHeaders,
-  };
+  const headers = buildRequestHeaders(body, requestHeaders);
   const callerSignal = options.signal ?? undefined;
   if (callerSignal?.aborted) {
     throw new CallerAbortError('Request aborted by caller');
@@ -247,16 +304,12 @@ async function _request(options: RequestOptions): Promise<unknown> {
     } else {
       const combinedController = new AbortController();
       const forwardAbort = () => combinedController.abort();
-      if (callerSignal.aborted || timeoutController.signal.aborted) {
-        forwardAbort();
-      } else {
-        callerSignal.addEventListener('abort', forwardAbort, { once: true });
-        timeoutController.signal.addEventListener('abort', forwardAbort, { once: true });
-        cleanupAbortListeners = () => {
-          callerSignal.removeEventListener('abort', forwardAbort);
-          timeoutController.signal.removeEventListener('abort', forwardAbort);
-        };
-      }
+      callerSignal.addEventListener('abort', forwardAbort, { once: true });
+      timeoutController.signal.addEventListener('abort', forwardAbort, { once: true });
+      cleanupAbortListeners = () => {
+        callerSignal.removeEventListener('abort', forwardAbort);
+        timeoutController.signal.removeEventListener('abort', forwardAbort);
+      };
       signal = combinedController.signal;
     }
   }
@@ -281,14 +334,14 @@ async function _request(options: RequestOptions): Promise<unknown> {
       throw new NetworkError(`Request timed out after ${requestTimeout}ms`);
     }
     if (callerAborted) {
-      throw new CallerAbortError(err instanceof Error ? err.message : 'Request aborted by caller');
+      throw new CallerAbortError(errorMessage(err, 'Request aborted by caller'));
     }
     if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
       throw new NetworkError(err.message);
     }
     // A fetch() promise only rejects when the request fails,
     // for example, because of a badly-formed request URL or a network error.
-    throw new NetworkError(err instanceof Error ? err.message : 'Network request failed');
+    throw new NetworkError(errorMessage(err, 'Network request failed'));
   } finally {
     clearTimeout(timeoutId);
     cleanupAbortListeners?.();
